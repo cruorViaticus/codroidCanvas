@@ -4,25 +4,56 @@ class RobotStatus {
   final CartesianPosition cartPosition;
   final String robotMode;
   final bool isConnected;
+  final bool isMoving; // 👈 1. Nové pole pre pohyb robota
 
   RobotStatus({
     CartesianPosition? cartPosition,
     this.robotMode = 'Disconnected',
     this.isConnected = false,
+    this.isMoving = false, // 👈 Predvolená hodnota false
   }) : cartPosition = cartPosition ?? CartesianPosition();
 
   double get x => cartPosition.x;
   double get y => cartPosition.y;
   double get z => cartPosition.z;
 
-  factory RobotStatus.fromCartJson(Map<String, dynamic> json) {
-    // Print raw telemetry response to inspect exact structure in VS Code
+  factory RobotStatus.fromCartJson(
+    Map<String, dynamic> json, {
+    RobotStatus? previousStatus, // 👈 Voliteľný predchádzajúci stav pre výpočet delty
+  }) {
     debugPrint("📊 [getCurCPos TELEMETRY]: $json");
 
+    final newPos = CartesianPosition.fromJson(json);
+
+    // Detekcia pohybu z JSON-u Codroidu
+    bool moving = false;
+    final data = json['data'] ?? json;
+
+    if (data is Map<String, dynamic>) {
+      if (data.containsKey('moving')) {
+        moving = data['moving'] == true || data['moving'] == 1;
+      } else if (data.containsKey('is_moving')) {
+        moving = data['is_moving'] == true || data['is_moving'] == 1;
+      } else if (data.containsKey('exec_state')) {
+        moving = data['exec_state'] == 1 || data['exec_state'] == 'RUNNING';
+      }
+    }
+
+    // Záložný výpočet z delty súradníc (ak JSON neobsahuje pole moving)
+    if (!moving && previousStatus != null && previousStatus.isConnected) {
+      double dx = (newPos.x - previousStatus.x).abs();
+      double dy = (newPos.y - previousStatus.y).abs();
+      double dz = (newPos.z - previousStatus.z).abs();
+      if (dx > 0.05 || dy > 0.05 || dz > 0.05) {
+        moving = true;
+      }
+    }
+
     return RobotStatus(
-      cartPosition: CartesianPosition.fromJson(json),
+      cartPosition: newPos,
       robotMode: 'Connected',
       isConnected: true,
+      isMoving: moving, // 👈 Odovzdanie hodnoty
     );
   }
 }
@@ -38,7 +69,6 @@ class CartesianPosition {
     try {
       dynamic cposData;
 
-      // Extract cpos from Map or List structures
       if (json.containsKey('data')) {
         final data = json['data'];
         if (data is Map<String, dynamic>) {

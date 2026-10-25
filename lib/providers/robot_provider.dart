@@ -22,11 +22,11 @@ class RobotProvider with ChangeNotifier {
   double paperWidthMm = 210.0;
   double paperHeightMm = 297.0;
 
-  double linearSpeed = 50.0;
+  double linearSpeed = 100.0;
 
   // Kalibrované Z-výšky
-  double penUpZ = 15.0; // Výška vo vzduchu (mm)
-  double penDownZ = -3.0; // Kontakt s papierom (mm)
+  double penUpZ = -10.0; // Výška vo vzduchu (mm)
+  double penDownZ = -15.0; // Kontakt s papierom (mm)
 
   // Všetky ťahy zobrazené na Canvas
   final List<List<StrokePoint>> _strokes = [];
@@ -300,7 +300,7 @@ class RobotProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> _processMotionQueue() async {
+ Future<void> _processMotionQueue() async {
     if (_isProcessingQueue || _motionQueue.isEmpty || _channel == null || !_status.isConnected) {
       return;
     }
@@ -308,82 +308,94 @@ class RobotProvider with ChangeNotifier {
     _isProcessingQueue = true;
     notifyListeners();
 
-    // 1. Štart sekvencie pre Auto režim a zapnutie motorov
-    await sendControlCommand(5, "ToAuto");
-    await Future.delayed(const Duration(milliseconds: 200));
-    await sendControlCommand(100, "ClearError");
-    await Future.delayed(const Duration(milliseconds: 200));
-    await sendControlCommand(1, "Power On");
-    await Future.delayed(const Duration(milliseconds: 400));
+    try {
+      // 1. Enable Auto mode and Power On ONCE at the start of queue processing
+      await sendControlCommand(5, "ToAuto");
+      await Future.delayed(const Duration(milliseconds: 150));
+      await sendControlCommand(100, "ClearError");
+      await Future.delayed(const Duration(milliseconds: 150));
+      await sendControlCommand(1, "Power On");
+      await Future.delayed(const Duration(milliseconds: 300));
 
-    while (_motionQueue.isNotEmpty) {
-      final currentStroke = _motionQueue.removeAt(0);
+      while (_motionQueue.isNotEmpty) {
+        final currentStroke = _motionQueue.removeAt(0);
 
-      if (currentStroke.length < 2) continue;
+        if (currentStroke.length < 2) continue;
 
-      // 2. Filtrovanie bodov: odstup min 1.5 mm pre ochranu zrýchlenia
-      List<StrokePoint> filtered = [currentStroke.first];
-      for (int i = 1; i < currentStroke.length; i++) {
-        double dx = (currentStroke[i].y - filtered.last.y) * 297.0;
-        double dy = (currentStroke[i].x - filtered.last.x) * 210.0;
-        // 1.5 mm prah (1.5 * 1.5 = 2.25)
-        if ((dx * dx + dy * dy) >= 2.25) {
-          filtered.add(currentStroke[i]);
+        // 2. Filter stroke points (minimum 5 mm spacing)
+        List<StrokePoint> filtered = [currentStroke.first];
+        for (int i = 1; i < currentStroke.length; i++) {
+          double dx = (currentStroke[i].y - filtered.last.y) * 297.0;
+          double dy = (currentStroke[i].x - filtered.last.x) * 210.0;
+          if ((dx * dx + dy * dy) >= 25.0) { // 5 mm step
+            filtered.add(currentStroke[i]);
+          }
         }
-      }
 
-      if (filtered.length < 2) continue;
-
-      List<Map<String, dynamic>> points = [];
-
-      // Start point - Nájazd vo vzduchu (FINE) + Klesnutie na papier (Z1)
-      double startX = (1.0 - filtered.first.y) * 297.0;
-      double startY = (1.0 - filtered.first.x) * 210.0;
-      points.add(_buildCartPoint(startX, startY, penUpZ, zoneType: "FINE"));
-      points.add(_buildCartPoint(startX, startY, penDownZ, zoneType: "Z1"));
-
-      // Stredné body: jemná prechodová zóna Z1 (1.0 mm) vhodná pre malé úseky S Penu
-      for (int i = 1; i < filtered.length - 1; i++) {
-        double px = (1.0 - filtered[i].y) * 297.0;
-        double py = (1.0 - filtered[i].x) * 210.0;
-        points.add(_buildCartPoint(px, py, penDownZ, zoneType: "Z1"));
-      }
-
-      // End point - Posledný bod na papieri (FINE) + Dvihnutie pera (FINE)
-      double lastX = (1.0 - filtered.last.y) * 297.0;
-      double lastY = (1.0 - filtered.last.x) * 210.0;
-      points.add(_buildCartPoint(lastX, lastY, penDownZ, zoneType: "FINE"));
-      points.add(_buildCartPoint(lastX, lastY, penUpZ, zoneType: "FINE"));
-
-      debugPrint("📦 Odosielam trajektóriu (${points.length} bodov) v movMulti...");
-
-      // 3. Odoslanie celého ťahu v jednom movMulti balíku
-      final payload = {
-        "id": DateTime.now().millisecondsSinceEpoch,
-        "type": "common",
-        "action": "movMulti",
-        "data": {
-          "type": "movCart",
-          "user": 1,
-          "tool": 1,
-          "points": points,
+        if (filtered.last != currentStroke.last) {
+          filtered.add(currentStroke.last);
         }
-      };
 
-      _sendJson(payload);
+        if (filtered.length < 2) continue;
 
-      // Čakacia doba podľa počtu bodov
-      int estimatedTravelTimeMs = (points.length * 60) + 800;
-      await Future.delayed(Duration(milliseconds: estimatedTravelTimeMs));
+        List<Map<String, dynamic>> points = [];
+
+        // Approach above paper (FINE) -> Touch down (FINE)
+        double startX = (1.0 - filtered.first.y) * 297.0;
+        double startY = (1.0 - filtered.first.x) * 210.0;
+        points.add(_buildCartPoint(startX, startY, penUpZ, zoneType: "FINE"));
+        points.add(_buildCartPoint(startX, startY, penDownZ, zoneType: "FINE"));
+
+        // Intermediate points on paper (RELATIVE blending)
+        for (int i = 1; i < filtered.length - 1; i++) {
+          double px = (1.0 - filtered[i].y) * 297.0;
+          double py = (1.0 - filtered[i].x) * 210.0;
+          points.add(_buildCartPoint(px, py, penDownZ, zoneType: "RELATIVE", zdis: 2.0));
+        }
+
+        // End point on paper (FINE) -> Lift pen (FINE)
+        double lastX = (1.0 - filtered.last.y) * 297.0;
+        double lastY = (1.0 - filtered.last.x) * 210.0;
+        points.add(_buildCartPoint(lastX, lastY, penDownZ, zoneType: "FINE"));
+        points.add(_buildCartPoint(lastX, lastY, penUpZ, zoneType: "FINE"));
+
+        debugPrint("✍️ [EXECUTING STROKE] Sending ${points.length} points via movMulti...");
+
+        final payload = {
+          "id": DateTime.now().millisecondsSinceEpoch,
+          "type": "common",
+          "action": "movMulti",
+          "data": {
+            "type": "movCart",
+            "user": 1,
+            "tool": 1,
+            "points": points,
+          }
+        };
+
+        _sendJson(payload);
+
+        // 3. DYNAMIC WAIT: Allow motion to start, then poll telemetry until robot stops
+        await Future.delayed(const Duration(milliseconds: 300));
+
+        int timeoutCounter = 0;
+        while (_status.isMoving && timeoutCounter < 150) { // Safety timeout: 15 seconds max
+          await Future.delayed(const Duration(milliseconds: 100));
+          timeoutCounter++;
+        }
+
+        // Brief stability pause before dispatching the next stroke
+        await Future.delayed(const Duration(milliseconds: 150));
+      }
+    } finally {
+      _isProcessingQueue = false;
+      notifyListeners();
     }
-
-    _isProcessingQueue = false;
-    notifyListeners();
   }
 
-  /// Pomocná metóda pre tvorbu bodu s podporou jemnej zóny Z1 (1.0 mm)
+  /// Pomocná metóda pre tvorbu bodu s podporou prehýbania ZONE
   Map<String, dynamic> _buildCartPoint(double x, double y, double z,
-      {required String zoneType}) {
+      {required String zoneType, double zdis = 2.0}) {
     return {
       "type": "movl",
       "target": {
@@ -392,12 +404,18 @@ class RobotProvider with ChangeNotifier {
           "x": x,
           "y": y,
           "z": z,
-          "a": -180.0, // Zhoda s otestovanou A/B orientáciou
+          "a": -180.0,
           "b": 0.0,
           "c": 90.0,
           "poscfg": {
             "mode": 7,
-            "cf1": 0, "cf2": 0, "cf3": 0, "cf4": 0, "cf5": 0, "cf6": 0, "cf7": 0
+            "cf1": 0,
+            "cf2": 0,
+            "cf3": 0,
+            "cf4": 0,
+            "cf5": 0,
+            "cf6": 0,
+            "cf7": 0
           }
         }
       },
@@ -421,13 +439,124 @@ class RobotProvider with ChangeNotifier {
               "data": {"zper": 0, "zdis": 0, "zvconst": 0}
             }
           : {
-              "type": "Z1", // 👈 Polomer zóny 1.0 mm pre dodržanie podmienky zdis < segment
-              "data": {"zper": 0, "zdis": 1.0, "zvconst": 0}
+              "type":
+                  "RELATIVE", // 👈 Oficiálny typ prechodovej zóny z projektu Codroid
+              "data": {"zper": 50, "zdis": zdis, "zvconst": 50}
             }
     };
   }
 
-/// Direct test movement to specific Cartesian coordinates using single `mov` action
+  /// Relative movement: moves dx in X, then dy in Y from current Cartesian position
+  Future<void> moveRelativeXthenY(double dx, double dy) async {
+    if (_channel == null || !_status.isConnected) {
+      debugPrint("⚠️ Cannot send relative move: Robot is not connected!");
+      return;
+    }
+
+    double startX = _status.cartPosition.x;
+    double startY = _status.cartPosition.y;
+    double startZ = _status.cartPosition.z;
+
+    // Fallback coordinates if telemetry hasn't updated yet
+    if (startX == 0.0 && startY == 0.0 && startZ == 0.0) {
+      startX = 50.0;
+      startY = 100.0;
+      startZ = 200.0;
+    }
+
+    double step1X = startX + dx;
+    double step1Y = startY;
+
+    double step2X = startX + dx;
+    double step2Y = startY + dy;
+
+    debugPrint(
+        "📍 [RELATIVE STEP] Start: ($startX, $startY) -> Step 1 X+: ($step1X, $step1Y) -> Step 2 Y+: ($step2X, $step2Y)");
+
+    // Ensure Auto mode & motors are enabled
+    await sendControlCommand(5, "ToAuto");
+    await Future.delayed(const Duration(milliseconds: 200));
+    await sendControlCommand(100, "ClearError");
+    await Future.delayed(const Duration(milliseconds: 200));
+    await sendControlCommand(1, "Power On");
+    await Future.delayed(const Duration(milliseconds: 400));
+
+    List<Map<String, dynamic>> points = [
+      _buildCartPoint(step1X, step1Y, startZ, zoneType: "FINE"),
+      _buildCartPoint(step2X, step2Y, startZ, zoneType: "FINE"),
+    ];
+
+    final payload = {
+      "id": DateTime.now().millisecondsSinceEpoch,
+      "type": "common",
+      "action": "movMulti",
+      "data": {
+        "type": "movCart",
+        "user": 1,
+        "tool": 1,
+        "points": points,
+      }
+    };
+
+    _sendJson(payload);
+  }
+
+  /// Generates and sends a batch of 10 points spaced 5 mm apart along +X
+  Future<void> sendTenPointsTest() async {
+    if (_channel == null || !_status.isConnected) {
+      debugPrint("⚠️ Robot nie je pripojený!");
+      return;
+    }
+
+    double startX = _status.cartPosition.x;
+    double startY = _status.cartPosition.y;
+    double startZ = _status.cartPosition.z;
+
+    if (startX == 0.0 && startY == 0.0 && startZ == 0.0) {
+      startX = 50.0;
+      startY = 100.0;
+      startZ = 200.0;
+    }
+
+    List<Map<String, dynamic>> points = [];
+
+    // Generovanie 10 bodov po 5 mm v smere +X
+    for (int i = 1; i <= 5; i++) {
+      double px = startX + (i * 5.0);
+      double py = startY;
+      double pz = startZ;
+
+      // Stredné body použi "ZONE" (zdis = 1.0 mm), posledný bod "FINE" na zastavenie
+      String zone = (i == 10) ? "FINE" : "ZONE";
+      points.add(_buildCartPoint(px, py, pz, zoneType: zone));
+    }
+
+    debugPrint(
+        "📍 [10-POINT TEST] Odosielam 10 bodov (5 mm krok, ZONE=1mm) v movMulti...");
+
+    await sendControlCommand(5, "ToAuto");
+    await Future.delayed(const Duration(milliseconds: 200));
+    await sendControlCommand(100, "ClearError");
+    await Future.delayed(const Duration(milliseconds: 200));
+    await sendControlCommand(1, "Power On");
+    await Future.delayed(const Duration(milliseconds: 400));
+
+    final payload = {
+      "id": DateTime.now().millisecondsSinceEpoch,
+      "type": "common",
+      "action": "movMulti",
+      "data": {
+        "type": "movCart",
+        "user": 1,
+        "tool": 1,
+        "points": points,
+      }
+    };
+
+    _sendJson(payload);
+  }
+
+  /// Direct test movement to specific Cartesian coordinates using single `mov` action
   Future<void> moveToPoint(double x, double y, double z,
       {double a = -180.0, double b = 0.0, double c = 90.0}) async {
     if (_channel == null || !_status.isConnected) {
@@ -435,7 +564,8 @@ class RobotProvider with ChangeNotifier {
       return;
     }
 
-    debugPrint("📍 [TEST MOVE] Target -> X: $x, Y: $y, Z: $z, A: $a, B: $b, C: $c");
+    debugPrint(
+        "📍 [TEST MOVE] Target -> X: $x, Y: $y, Z: $z, A: $a, B: $b, C: $c");
 
     // 1. Force Auto mode sequence before movement
     await sendControlCommand(5, "ToAuto");
@@ -463,7 +593,13 @@ class RobotProvider with ChangeNotifier {
             "c": c,
             "poscfg": {
               "mode": 7,
-              "cf1": 0, "cf2": 0, "cf3": 0, "cf4": 0, "cf5": 0, "cf6": 0, "cf7": 0
+              "cf1": 0,
+              "cf2": 0,
+              "cf3": 0,
+              "cf4": 0,
+              "cf5": 0,
+              "cf6": 0,
+              "cf7": 0
             }
           }
         },
@@ -490,6 +626,7 @@ class RobotProvider with ChangeNotifier {
 
     _sendJson(payload);
   }
+
   Future<void> moveToCanvasHome() async {
     if (_channel == null) return;
 
@@ -545,6 +682,110 @@ class RobotProvider with ChangeNotifier {
           "type": "FINE",
           "data": {"zper": 0, "zdis": 0, "zvconst": 0}
         }
+      }
+    };
+
+    _sendJson(payload);
+  }
+
+  /// Test 2 bodov v jednom movMulti balíku (+10mm X, potom +20mm Y)
+  Future<void> sendTwoPointsTest() async {
+    if (_channel == null || !_status.isConnected) {
+      debugPrint("⚠️ Robot nie je pripojený!");
+      return;
+    }
+
+    double startX = _status.cartPosition.x;
+    double startY = _status.cartPosition.y;
+    double startZ = _status.cartPosition.z;
+
+    // Náhradné súradnice ak telemetria ešte nenabehla
+    if (startX == 0.0 && startY == 0.0 && startZ == 0.0) {
+      startX = 50.0;
+      startY = 100.0;
+      startZ = 200.0;
+    }
+
+    double p1X = startX + 10.0;
+    double p1Y = startY;
+
+    double p2X = startX + 10.0;
+    double p2Y = startY + 20.0;
+
+    List<Map<String, dynamic>> points = [
+      _buildCartPoint(p1X, p1Y, startZ, zoneType: "FINE"),
+      _buildCartPoint(p2X, p2Y, startZ, zoneType: "FINE"),
+    ];
+
+    debugPrint("📍 [2-POINT TEST] Odosielam 2 body (FINE) v movMulti...");
+
+    await sendControlCommand(5, "ToAuto");
+    await Future.delayed(const Duration(milliseconds: 200));
+    await sendControlCommand(100, "ClearError");
+    await Future.delayed(const Duration(milliseconds: 200));
+    await sendControlCommand(1, "Power On");
+    await Future.delayed(const Duration(milliseconds: 400));
+
+    final payload = {
+      "id": DateTime.now().millisecondsSinceEpoch,
+      "type": "common",
+      "action": "movMulti",
+      "data": {
+        "type": "movCart",
+        "user": 1,
+        "tool": 1,
+        "points": points,
+      }
+    };
+
+    _sendJson(payload);
+  }
+
+  /// Pomocná metóda pre tvorbu bodu s presným zastavením (FINE)
+  /// Test 3 points in a single movMulti payload with FINE zone
+  Future<void> sendThreePointsTest() async {
+    if (_channel == null || !_status.isConnected) {
+      debugPrint("⚠️ Robot nie je pripojený!");
+      return;
+    }
+
+    double startX = _status.cartPosition.x;
+    double startY = _status.cartPosition.y;
+    double startZ = _status.cartPosition.z;
+
+    if (startX == 0.0 && startY == 0.0 && startZ == 0.0) {
+      startX = 50.0;
+      startY = 100.0;
+      startZ = 200.0;
+    }
+
+    // 3 body: stredný bod používa RELATIVE zónu (2 mm) pre plynulý prejazd
+    List<Map<String, dynamic>> points = [
+      _buildCartPoint(startX + 10.0, startY, startZ, zoneType: "FINE"),
+      _buildCartPoint(startX + 10.0, startY + 10.0, startZ,
+          zoneType: "RELATIVE", zdis: 2.0),
+      _buildCartPoint(startX + 10.0, startY + 20.0, startZ, zoneType: "FINE"),
+    ];
+
+    debugPrint(
+        "📍 [3-POINT RELATIVE TEST] Odosielam 3 body (stredný RELATIVE) v movMulti...");
+
+    await sendControlCommand(5, "ToAuto");
+    await Future.delayed(const Duration(milliseconds: 200));
+    await sendControlCommand(100, "ClearError");
+    await Future.delayed(const Duration(milliseconds: 200));
+    await sendControlCommand(1, "Power On");
+    await Future.delayed(const Duration(milliseconds: 400));
+
+    final payload = {
+      "id": DateTime.now().millisecondsSinceEpoch,
+      "type": "common",
+      "action": "movMulti",
+      "data": {
+        "type": "movCart",
+        "user": 1,
+        "tool": 1,
+        "points": points,
       }
     };
 

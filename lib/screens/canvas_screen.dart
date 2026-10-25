@@ -174,49 +174,48 @@ class _CanvasScreenState extends State<CanvasScreen> {
             ),
           ),
 
-          // Test API Move Buttons A & B
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0),
-            child: Row(
-              children: [
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: robotProvider.status.isConnected
-                        ? () => robotProvider.moveToPoint(50.0, 100.0, 200.0,
-                            a: -180.0, b: 0.0, c: 90.0)
-                        : null,
-                    icon: const Icon(Icons.navigation),
-                    label: const Text('Move to A\n(50, 100, 200)',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(fontSize: 12)),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.teal,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: robotProvider.status.isConnected
-                        ? () => robotProvider.moveToPoint(100.0, 100.0, 200.0,
-                            a: -180.0, b: 0.0, c: 90.0)
-                        : null,
-                    icon: const Icon(Icons.navigation),
-                    label: const Text('Move to B\n(100, 100, 200)',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(fontSize: 12)),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.deepOrange,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                    ),
-                  ),
-                ),
-              ],
-            ),
+         // Test API Move Buttons A & B
+Padding(
+  padding: const EdgeInsets.symmetric(horizontal: 16.0),
+  child: Row(
+    children: [
+      Expanded(
+        child: ElevatedButton.icon(
+          onPressed: robotProvider.status.isConnected
+              ? () => robotProvider.sendThreePointsTest()
+              : null,
+          icon: const Icon(Icons.linear_scale),
+          label: const Text('Move A\n(10 pts x 5mm)',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 12)),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.teal,
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(vertical: 12),
           ),
+        ),
+      ),
+      const SizedBox(width: 12),
+      Expanded(
+        child: ElevatedButton.icon(
+          onPressed: robotProvider.status.isConnected
+              ? () => robotProvider.moveToPoint(100.0, 100.0, 200.0,
+                  a: -180.0, b: 0.0, c: 90.0)
+              : null,
+          icon: const Icon(Icons.navigation),
+          label: const Text('Move to B\n(100, 100, 200)',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 12)),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.deepOrange,
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(vertical: 12),
+          ),
+        ),
+      ),
+    ],
+  ),
+),
 
           // Emergency Stop Button
           Padding(
