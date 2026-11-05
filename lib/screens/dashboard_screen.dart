@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/robot_provider.dart';
+import '../widgets/app_logo.dart';
 import 'canvas_screen.dart';
 import 'jogging_screen.dart';
 import 'settings_screen.dart';
@@ -14,7 +15,7 @@ class DashboardScreen extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Codroid S Pen Controller'),
+        title: const AppBarTitle('Codroid S Pen Controller'),
         backgroundColor: Colors.indigo,
         foregroundColor: Colors.white,
       ),
@@ -210,6 +211,42 @@ class DashboardScreen extends StatelessWidget {
                 ),
               ),
             ),
+            const SizedBox(height: 12),
+
+            // Aktuálne nastavenie rýchlosti a Z korekcie papiera
+            Card(
+              elevation: 4,
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Plotter Settings',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const Divider(),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceAround,
+                      children: [
+                        _infoChip('Feed',
+                            '${robotProvider.linearSpeed.toStringAsFixed(0)} mm/s'),
+                        _infoChip(
+                          'Z Offset',
+                          '${robotProvider.zOffsetMm >= 0 ? '+' : ''}'
+                              '${robotProvider.zOffsetMm.toStringAsFixed(1)} mm',
+                        ),
+                        _infoChip(
+                          'Pen Z (up/down)',
+                          '${robotProvider.penUpZ.toStringAsFixed(1)} / '
+                              '${robotProvider.penDownZ.toStringAsFixed(1)}',
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
             const SizedBox(height: 24),
 
             // Navigation Buttons
@@ -278,6 +315,29 @@ class DashboardScreen extends StatelessWidget {
           val.toStringAsFixed(2),
           style: const TextStyle(
             fontSize: 18,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Malý textový "chip" pre nastavenia (rýchlosť, Z korekcia…).
+  Widget _infoChip(String label, String value) {
+    return Column(
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            color: Colors.grey,
+            fontWeight: FontWeight.bold,
+            fontSize: 12,
+          ),
+        ),
+        Text(
+          value,
+          style: const TextStyle(
+            fontSize: 14,
             fontWeight: FontWeight.bold,
           ),
         ),

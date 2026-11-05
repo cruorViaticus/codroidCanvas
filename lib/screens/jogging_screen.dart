@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/robot_provider.dart';
+import '../widgets/app_logo.dart';
 
 class JoggingScreen extends StatelessWidget {
   const JoggingScreen({super.key});
@@ -14,7 +15,7 @@ class JoggingScreen extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Jogging Control (Tool 1)'),
+        title: const AppBarTitle('Jogging Control (Tool 1)'),
         backgroundColor: Colors.indigo,
         foregroundColor: Colors.white,
       ),

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../models/stroke_point.dart';
 import '../providers/robot_provider.dart';
+import '../widgets/app_logo.dart';
 
 class CanvasScreen extends StatefulWidget {
   const CanvasScreen({super.key});
@@ -55,7 +56,7 @@ class _CanvasScreenState extends State<CanvasScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('S Pen Drawing Canvas'),
+        title: const AppBarTitle('S Pen Drawing Canvas'),
         backgroundColor: Colors.indigo,
         foregroundColor: Colors.white,
         actions: [
@@ -86,6 +87,13 @@ class _CanvasScreenState extends State<CanvasScreen> {
                       'Strokes: ${robotProvider.strokes.length}',
                       style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
+                    if (robotProvider.pendingStrokes > 0) ...[
+                      const SizedBox(width: 8),
+                      Text(
+                        'Queued: ${robotProvider.pendingStrokes}',
+                        style: TextStyle(color: Colors.blueGrey.shade700),
+                      ),
+                    ],
                     if (robotProvider.isProcessingQueue) ...[
                       const SizedBox(width: 8),
                       const SizedBox(
@@ -110,6 +118,30 @@ class _CanvasScreenState extends State<CanvasScreen> {
               ],
             ),
           ),
+
+          // Chyba z controllerа – najčastejšie dôvod alarmu robota
+          if (robotProvider.lastControllerError.isNotEmpty)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+              color: Colors.red.shade100,
+              child: Row(
+                children: [
+                  const Icon(Icons.error_outline, color: Colors.red, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      robotProvider.lastControllerError,
+                      style: TextStyle(color: Colors.red.shade900, fontSize: 12),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => robotProvider.clearRobotError(),
+                    child: const Text('Clear Error'),
+                  ),
+                ],
+              ),
+            ),
 
           // Canvas A4 paper
           Expanded(

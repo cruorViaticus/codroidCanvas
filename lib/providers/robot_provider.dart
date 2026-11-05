@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:web_socket_channel/io.dart';
@@ -23,12 +22,52 @@ class RobotProvider with ChangeNotifier {
   double paperWidthMm = 210.0;
   double paperHeightMm = 297.0;
 
-  // Rýchlosť a akcelerácia
-  double linearSpeed = 250.0; // Predvolená rýchlosť (mm/s)
+  // --- RÝCHLOSŤ & Z KOREKCIA (nastaviteľné v Settings) ---
 
-  // Kalibrované Z-výšky
-  double penUpZ = 15.0; // Východzia pozícia / výška vo vzduchu (15 mm)
-  double penDownZ = 0.0; // Kontakt s papierom (0 mm)
+  /// Maximálna povolená TCP rýchlosť (mm/s).
+  static const double maxLinearSpeed = 500.0;
+
+  /// Minimálna použiteľná TCP rýchlosť (mm/s).
+  static const double minLinearSpeed = 10.0;
+
+  /// Maximálna Z korekcia (mm) – papier môže byť vyššie/nížšie o 3 cm.
+  static const double maxZOffsetMm = 30.0;
+
+  /// Predvolená rýchlosť (mm/s).
+  static const double defaultLinearSpeed = 250.0;
+
+  double _linearSpeed = defaultLinearSpeed;
+
+  /// TCP rýchlosť v mm/s (automaticky orezaná na [minLinearSpeed]..[maxLinearSpeed]).
+  double get linearSpeed => _linearSpeed;
+
+  set linearSpeed(double value) => _linearSpeed = _clampSpeed(value);
+
+  /// Nominálna (mechanická) výška pera vo vzduchu bez korekcie papiera (mm).
+  double penUpNominalZ = 15.0;
+
+  /// Nominálna výška pera v kontakte s papierom bez korekcie (mm).
+  double penDownNominalZ = 0.0;
+
+  double _zOffsetMm = 0.0;
+
+  /// Korekcia Z podľa výšky papiera (mm), rozsah ±[maxZOffsetMm].
+  ///
+  /// Kladná hodnota = papier je vyššie, pero ide vyššie (celá dráha sa
+  /// posunie v +Z), záporná = papier je nižšie, pero ide nižšie.
+  double get zOffsetMm => _zOffsetMm;
+
+  set zOffsetMm(double value) =>
+      _zOffsetMm = value.clamp(-maxZOffsetMm, maxZOffsetMm).toDouble();
+
+  /// Výška pera vo vzduchu včetne korekcie papiera – posiela sa robotovi.
+  double get penUpZ => penUpNominalZ + _zOffsetMm;
+
+  /// Výška pera na papieri včetne korekcie papiera – posiela sa robotovi.
+  double get penDownZ => penDownNominalZ + _zOffsetMm;
+
+  static double _clampSpeed(double value) =>
+      value.clamp(minLinearSpeed, maxLinearSpeed).toDouble();
 
   // Všetky ťahy zobrazené na Canvas
   final List<List<StrokePoint>> _strokes = [];
@@ -37,20 +76,53 @@ class RobotProvider with ChangeNotifier {
   final List<List<StrokePoint>> _motionQueue = [];
   bool _isProcessingQueue = false;
 
+  // --- STAV POSLEDNEJ ODPOVEDE Z CONTROLLERA ---
+  String _lastControllerError = '';
+  bool _motionRejected = false;
+  DateTime _motionDeadline = DateTime.fromMillisecondsSinceEpoch(0);
+
   RobotStatus get status => _status;
   String get ipAddress => _ipAddress;
   bool get isConnecting => _isConnecting;
   List<List<StrokePoint>> get strokes => _strokes;
   bool get isProcessingQueue => _isProcessingQueue;
 
+  /// Počet ťahov čakajúcich vo fronte (kým ich robot vykreslí).
+  int get pendingStrokes => _motionQueue.length;
+
+  /// Posledná chybová správa z controllerа (prázdny reťazec = bez chyby).
+  String get lastControllerError => _lastControllerError;
+
+  /// Controller odmietol posledný pohybový príkaz (code != 0).
+  bool get wasMotionRejected => _motionRejected;
+
+  /// Robot hlási poruchu (Fault / statusFlag bit 15 / safetyMode 0).
+  bool get hasFault => _status.isFault;
+
+  /// Robot sa hýbe, alebo ešte len dobieha naplánovanú trajektóriu.
+  ///
+  /// `getCurCPos` v API nevracia príznak pohybu, takže okrem zmeny súradníc
+  /// držíme aj "watchdog" – čas, dokedy má pohyb podľa odhadu trvať.
+  bool get isRobotBusy =>
+      _status.isMoving || DateTime.now().isBefore(_motionDeadline);
+
   RobotProvider() {
-    _loadPreferences();
+    _initialized = _loadPreferences();
   }
+
+  late final Future<void> _initialized;
+
+  /// Dokončenie načítania uložených nastavení (IP, rýchlosť, Z korekcia).
+  Future<void> get initialized => _initialized;
 
   Future<void> _loadPreferences() async {
     final prefs = await SharedPreferences.getInstance();
     _ipAddress = prefs.getString('robot_ip') ?? '192.168.101.166';
-    linearSpeed = prefs.getDouble('linear_speed') ?? 250.0;
+    _linearSpeed =
+        _clampSpeed(prefs.getDouble('linear_speed') ?? defaultLinearSpeed);
+    _zOffsetMm = (prefs.getDouble('z_offset_mm') ?? 0.0)
+        .clamp(-maxZOffsetMm, maxZOffsetMm)
+        .toDouble();
     notifyListeners();
   }
 
@@ -59,6 +131,27 @@ class RobotProvider with ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('robot_ip', ip);
     notifyListeners();
+  }
+
+  /// Uloží TCP rýchlosť (orezanú na 10..500 mm/s) do SharedPreferences.
+  Future<void> setLinearSpeed(double value) async {
+    linearSpeed = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble('linear_speed', linearSpeed);
+    notifyListeners();
+    debugPrint(
+        "💾 [SETTINGS] Rýchlosť uložená: ${linearSpeed.toStringAsFixed(0)} mm/s");
+  }
+
+  /// Uloží Z korekciu papiera (orezanú na ±30 mm) do SharedPreferences.
+  Future<void> setZOffset(double value) async {
+    zOffsetMm = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble('z_offset_mm', zOffsetMm);
+    notifyListeners();
+    debugPrint(
+        "💾 [SETTINGS] Z korekcia uložená: ${zOffsetMm.toStringAsFixed(1)} mm "
+        "(pero hore: ${penUpZ.toStringAsFixed(1)} / dole: ${penDownZ.toStringAsFixed(1)})");
   }
 
   // --- SPOJENIE A SIEŤOVÝ PING ---
@@ -79,19 +172,9 @@ class RobotProvider with ChangeNotifier {
           _isConnecting = false;
 
           try {
-            final json = jsonDecode(message as String);
-
-            if (json.containsKey('code') && json['code'] != 0) {
-              debugPrint(
-                  "🛑 [CONTROLLER ERROR] ID: ${json['id']} | Code: ${json['code']} | Msg: ${json['msg'] ?? json['info'] ?? 'Unknown Error'}");
-            }
-
-            if (json['action'] == 'getCurCPos') {
-              _status = RobotStatus.fromCartJson(
-                json,
-                previousStatus: _status,
-              );
-              notifyListeners();
+            final decoded = jsonDecode(message as String);
+            if (decoded is Map<String, dynamic>) {
+              _handleResponse(decoded);
             }
           } catch (e) {
             debugPrint("⚠️ Chyba pri dekódovaní JSON: $e");
@@ -111,6 +194,12 @@ class RobotProvider with ChangeNotifier {
       );
 
       _startHeartbeat();
+
+      // Ak ostali ťahy vo fronte z predchádzajúceho (prerušeného) spojenia,
+      // skúsime ich doraziť hneď po nadviazaní komunikácie.
+      Future<void>.delayed(const Duration(seconds: 2), () {
+        if (_motionQueue.isNotEmpty) _processMotionQueue();
+      });
     } catch (e) {
       debugPrint("Výnimka pri pripájaní: $e");
       _isConnecting = false;
@@ -126,6 +215,9 @@ class RobotProvider with ChangeNotifier {
     _channel?.sink.close();
     _channel = null;
     _status = RobotStatus();
+    _motionRejected = false;
+    _motionDeadline = DateTime.fromMillisecondsSinceEpoch(0);
+    _lastControllerError = '';
     notifyListeners();
   }
 
@@ -133,6 +225,102 @@ class RobotProvider with ChangeNotifier {
     if (_channel != null) {
       _channel!.sink.add(jsonEncode(payload));
     }
+  }
+
+  /// Spracuje každú odpoveď z controllerа – chyby, telemetriu aj stav robota.
+  void _handleResponse(Map<String, dynamic> json) {
+    final action = json['action'];
+
+    // 1. Chyby: `code` (transport, 200 = OK) aj `data.code` (výsledok príkazu).
+    final error = RobotStatus.errorFromJson(json);
+    if (error != null) {
+      _lastControllerError = error;
+      debugPrint("🛑 [CONTROLLER ERROR] $_lastControllerError");
+
+      // Ak controller odmietol pohyb (typicky prekrytie dvoch trajektórií),
+      // fronta sa nesmie ďalej sypať do robota.
+      if (action == 'mov' || action == 'movMulti') {
+        _motionRejected = true;
+        _motionDeadline = DateTime.fromMillisecondsSinceEpoch(0);
+      }
+      notifyListeners();
+      return;
+    }
+
+    // 2. Telemetria / stav
+    if (action == 'getCurCPos') {
+      _status = RobotStatus.fromCartJson(json, previousStatus: _status);
+      notifyListeners();
+    } else if (action == 'getRobotStates') {
+      _status = RobotStatus.fromStateJson(json, previousStatus: _status);
+      notifyListeners();
+    }
+  }
+
+  /// Čaká na potvrdený pokoj robota (žiadny pohyb + vypršaný watchdog).
+  ///
+  /// Vráti `false`, ak robot medzitým zhavaroval, odmietol príkaz alebo
+  /// sa nezastavil do [timeout].
+  Future<bool> waitUntilIdle({
+    Duration timeout = const Duration(seconds: 30),
+    int stableSamples = 3,
+  }) async {
+    if (_channel == null || !_status.isConnected) return false;
+
+    final startedAt = DateTime.now();
+    int stable = 0;
+
+    while (DateTime.now().difference(startedAt) < timeout) {
+      if (_motionRejected) return false;
+      if (hasFault) {
+        _lastControllerError = 'Robot hlási poruchu (${_status.deviceMode}).';
+        notifyListeners();
+        return false;
+      }
+
+      if (isRobotBusy) {
+        stable = 0;
+      } else {
+        stable++;
+        if (stable >= stableSamples) return true;
+      }
+
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+
+    _lastControllerError =
+        'Timeout: robot sa nezastavil do ${timeout.inSeconds} s.';
+    debugPrint("⏱️ [MOTION] $_lastControllerError");
+    notifyListeners();
+    return false;
+  }
+
+  /// Odošle pohybový balík a nastaví watchdog predpokladanej dĺžky pohybu.
+  ///
+  /// Volajte až po [waitUntilIdle] – dva súbežné pohyby = konflikt
+  /// trajektórie v controlleri a následný alarm.
+  Future<bool> sendMotionPacket(
+    Map<String, dynamic> payload, {
+    required int estimatedDurationMs,
+  }) async {
+    if (_channel == null || !_status.isConnected) return false;
+
+    _motionRejected = false;
+    _motionDeadline = DateTime.now().add(
+      Duration(milliseconds: estimatedDurationMs.clamp(100, 120000)),
+    );
+    _sendJson(payload);
+    notifyListeners();
+    return true;
+  }
+
+  /// Zruší chybový stav a pošle controlleru `ClearError` (100).
+  Future<void> clearRobotError() async {
+    _lastControllerError = '';
+    _motionRejected = false;
+    _motionDeadline = DateTime.fromMillisecondsSinceEpoch(0);
+    notifyListeners();
+    await sendControlCommand(100, 'ClearError');
   }
 
   Future<bool> pingNetworkIP() async {
@@ -221,6 +409,8 @@ class RobotProvider with ChangeNotifier {
 
   void stopMovement() {
     _motionQueue.clear();
+    _motionDeadline = DateTime.fromMillisecondsSinceEpoch(0);
+    _motionRejected = false;
     stopTcpJog();
     _sendJson({
       "id": DateTime.now().millisecondsSinceEpoch,
@@ -300,12 +490,15 @@ class RobotProvider with ChangeNotifier {
   }
 
   /// Hlavný asynchrónny cyklus: Posiela ťahy postupne a čaká na úplné zastavenie robota
- // V RobotProvider dodaj verejný getter pre odoslanie JSON-u:
+  // V RobotProvider dodaj verejný getter pre odoslanie JSON-u:
   void sendPayload(Map<String, dynamic> payload) => _sendJson(payload);
 
   // A _processMotionQueue sa skráti na jednoduché volanie servisu:
   Future<void> _processMotionQueue() async {
-    if (_isProcessingQueue || _motionQueue.isEmpty || _channel == null || !_status.isConnected) {
+    if (_isProcessingQueue ||
+        _motionQueue.isEmpty ||
+        _channel == null ||
+        !_status.isConnected) {
       return;
     }
 
@@ -621,6 +814,33 @@ class RobotProvider with ChangeNotifier {
     await Future.delayed(const Duration(milliseconds: 300));
 
     await _sendSingleMovl(50.0, 100.0, penUpZ, zoneType: "FINE");
+  }
+
+  /// Skúšobný zvislý pohyb pera na aktuálnom X/Y – kontrola Z korekcie papiera.
+  ///
+  /// [down] = `true` → pero klesne na [penDownZ], `false` → zdvihne na [penUpZ].
+  /// Vráti `false`, ak robot nie je pripojený / je zaneprázdnený / nemá
+  /// známu pozíciu.
+  Future<bool> movePenToHeight({required bool down}) async {
+    if (_channel == null || !_status.isConnected) return false;
+    if (_isProcessingQueue || isRobotBusy) {
+      debugPrint("⚠️ [Z TEST] Robot je zaneprázdnený – Z test preskočený.");
+      return false;
+    }
+
+    final c = _status.cartPosition;
+    if (c.x == 0.0 && c.y == 0.0 && c.z == 0.0) {
+      debugPrint(
+          "⚠️ [Z TEST] Neznáma pozícia robota – najprv načítaj telemetriu.");
+      return false;
+    }
+
+    final targetZ = down ? penDownZ : penUpZ;
+    debugPrint("📐 [Z TEST] Pero ${down ? 'dole' : 'hore'} na Z = "
+        "${targetZ.toStringAsFixed(1)} mm (korekcia ${zOffsetMm.toStringAsFixed(1)} mm)");
+
+    await _sendSingleMovl(c.x, c.y, targetZ, zoneType: "FINE");
+    return true;
   }
 
   /// Test 2 bodov v jednom movMulti balíku (+10mm X, potom +20mm Y)

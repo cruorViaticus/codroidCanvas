@@ -1,126 +1,233 @@
-import 'dart:async';
 import 'dart:math' as math;
+import 'dart:ui' show Offset;
+
 import 'package:flutter/foundation.dart';
+
 import '../models/stroke_point.dart';
 import '../providers/robot_provider.dart';
 
+/// Prekladá ťahy z canvasu na balíky `movMulti` pre Codroid controller.
+///
+/// Dve pravidlá z API dokumentácie, ktoré musia byť dodržané, inak robot
+/// spadne do alarmu:
+///  1. `movMulti` / MovLSegments prijme **maximálne 30 pozícií** v balíku.
+///  2. Nový pohybový príkaz sa posiela až keď controller hlási pokoj –
+///     dva súbežné pohyby = konflikt trajektórie a alarm.
 class StrokeMotionProcessor {
+  /// API: "continous line motion (30 positions maximum)".
+  static const int maxPointsPerPacket = 30;
+
+  /// Minimálna vzdialenosť dvoch bodov ťahu v mm (filtrovanie vstupu).
+  static const double minPointSpacingMm = 5.0;
+
   final RobotProvider provider;
 
   StrokeMotionProcessor(this.provider);
 
-  /// Spracuje celú FIFO frontu ťahov čistým odosielaním balíkov movMulti
+  /// Spracuje celú FIFO frontu ťahov – jeden ťah = jeden alebo viac balíkov.
   Future<void> processQueue(List<List<StrokePoint>> queue) async {
-    if (queue.isEmpty || !provider.status.isConnected) return;
+    if (!provider.status.isConnected) return;
 
     while (queue.isNotEmpty) {
-      // Ak sa robot ešte hýbe z predchádzajúceho ťahu, počkáme
-      while (provider.status.isMoving) {
-        await Future.delayed(const Duration(milliseconds: 100));
+      if (!provider.status.isConnected) return;
+
+      final stroke = queue.first;
+      final success = await plotStroke(stroke);
+
+      if (queue.isNotEmpty && identical(queue.first, stroke)) {
+        queue.removeAt(0);
       }
 
-      final currentStroke = queue.removeAt(0);
-      if (currentStroke.length < 2) continue;
-
-      // Filtrovanie bodov (min. 5 mm krok)
-      List<StrokePoint> filtered = [currentStroke.first];
-      for (int i = 1; i < currentStroke.length; i++) {
-        double dx = (currentStroke[i].y - filtered.last.y) * 297.0;
-        double dy = (currentStroke[i].x - filtered.last.x) * 210.0;
-        if ((dx * dx + dy * dy) >= 25.0) {
-          filtered.add(currentStroke[i]);
-        }
-      }
-
-      if (filtered.last != currentStroke.last) {
-        filtered.add(currentStroke.last);
-      }
-
-      if (filtered.length < 2) continue;
-
-      // Generovanie 3D bodov trajektórie
-      final fullStrokePoints = buildFullStrokePoints(filtered);
-
-      // Výpočet dĺžky 3D dráhy v mm
-      double totalDistanceMm = 0.0;
-      for (int i = 0; i < fullStrokePoints.length - 1; i++) {
-        final c1 = fullStrokePoints[i]['target']['cpos'];
-        final c2 = fullStrokePoints[i + 1]['target']['cpos'];
-        double dx = (c2['x'] as double) - (c1['x'] as double);
-        double dy = (c2['y'] as double) - (c1['y'] as double);
-        double dz = (c2['z'] as double) - (c1['z'] as double);
-        totalDistanceMm += math.sqrt(dx * dx + dy * dy + dz * dz);
-      }
-
-      // Reálny čas trvania dráhy (35 mm/s priemerná rýchlosť + 1.2s rezerva na Z nájazd)
-      int minPhysicalTimeMs = ((totalDistanceMm / 35.0) * 1000).toInt() + 1200;
-
-      debugPrint(
-          "✍️ [ODOSIELAM ŤAH] ${fullStrokePoints.length} bodov (${totalDistanceMm.toStringAsFixed(1)} mm). Čakám min. ${minPhysicalTimeMs} ms...");
-
-      final payload = {
-        "id": DateTime.now().millisecondsSinceEpoch,
-        "type": "common",
-        "action": "movMulti",
-        "data": {
-          "type": "movCart",
-          "user": 1,
-          "tool": 1,
-          "points": fullStrokePoints,
-        }
-      };
-
-      // Odoslanie čistého movMulti bez akýchkoľvek sprievodných Power On príkazov
-      provider.sendPayload(payload);
-
-      // Čakanie na fyzické dokončenie dráhy v Codroide
-      await Future.delayed(Duration(milliseconds: minPhysicalTimeMs));
-
-      // Overenie kľudu cez telemetriu (2 cykly = 200 ms kľud)
-      int stopConfirmations = 0;
-      int safetyCounter = 0;
-      while (stopConfirmations < 2 && safetyCounter < 40) {
-        await Future.delayed(const Duration(milliseconds: 100));
-        safetyCounter++;
-        if (!provider.status.isMoving) {
-          stopConfirmations++;
-        } else {
-          stopConfirmations = 0;
-        }
+      if (!success) {
+        queue.clear();
+        debugPrint(
+            "⛔ Kreslenie prerušené (chyba robota / timeout), fronta vyčistená.");
+        return;
       }
     }
   }
 
-  /// Zostaví kompletný zoznam Carteskych bodov pre 1 ťah
-  List<Map<String, dynamic>> buildFullStrokePoints(List<StrokePoint> stroke) {
-    List<Map<String, dynamic>> points = [];
+  /// Vykreslí jeden ťah.
+  ///
+  /// Ťah sa rozdelí na balíky s max. [maxPointsPerPacket] bodmi. Každý balík
+  /// sa odošle až po potvrdenom zastavení robota a pred odoslaním ďalšieho
+  /// sa opäť čaká na pokoj – tým sa nikdy neprekryjú dve trajektórie.
+  Future<bool> plotStroke(List<StrokePoint> stroke) async {
+    final path = toMillimetrePath(stroke);
+    if (path.length < 2) return true;
 
-    double startX = (1.0 - stroke.first.y) * 297.0;
-    double startY = (1.0 - stroke.first.x) * 210.0;
+    int index = 0;
+    bool firstPacket = true;
 
-    // 1. Presun vo vzduchu nad štart (Z = penUpZ, FINE)
-    points.add(buildCartPoint(startX, startY, provider.penUpZ, zoneType: "FINE"));
+    while (index < path.length) {
+      final packet = <Map<String, dynamic>>[];
 
-    // 2. Klesnutie na papier (Z = penDownZ, FINE)
-    points.add(buildCartPoint(startX, startY, provider.penDownZ, zoneType: "FINE"));
+      if (firstPacket) {
+        // Pero musí byť vo vzduchu, až potom klesneme na štart.
+        packet.addAll(_approachPoints(path.first));
+        packet.add(buildCartPoint(
+          path.first.dx,
+          path.first.dy,
+          provider.penDownZ,
+          zoneType: "FINE",
+        ));
+        index = 1;
+        firstPacket = false;
+      }
 
-    // 3. Stredné body na papieri (Z = penDownZ, RELATIVE)
-    for (int i = 1; i < stroke.length - 1; i++) {
-      double px = (1.0 - stroke[i].y) * 297.0;
-      double py = (1.0 - stroke[i].x) * 210.0;
-      points.add(buildCartPoint(px, py, provider.penDownZ, zoneType: "RELATIVE", zdis: 4.0));
+      // Stredné body balíka – posledný bod musí mať FINE (presné zastavenie)
+      while (index < path.length) {
+        final bool isStrokeEnd = index == path.length - 1;
+        final int reserve = isStrokeEnd ? 1 : 0; // miesto pre zdvih pera
+        if (packet.length + 1 + reserve > maxPointsPerPacket) break;
+
+        final point = path[index];
+        packet.add(buildCartPoint(
+          point.dx,
+          point.dy,
+          provider.penDownZ,
+          zoneType: "RELATIVE",
+          zdis: 4.0,
+        ));
+        index++;
+      }
+
+      packet[packet.length - 1] = _withFineZone(packet.last);
+
+      if (index >= path.length) {
+        // Koniec ťahu – zdvih pera na poslednej pozícii.
+        final end = path.last;
+        packet.add(buildCartPoint(
+          end.dx,
+          end.dy,
+          provider.penUpZ,
+          zoneType: "FINE",
+        ));
+      }
+
+      final sent = await sendPacket(packet);
+      if (!sent) return false;
     }
 
-    // 4. Koniec na papieri (Z = penDownZ, FINE)
-    double lastX = (1.0 - stroke.last.y) * 297.0;
-    double lastY = (1.0 - stroke.last.x) * 210.0;
-    points.add(buildCartPoint(lastX, lastY, provider.penDownZ, zoneType: "FINE"));
+    return true;
+  }
 
-    // 5. Zdvih do vzduchu (Z = penUpZ, FINE)
-    points.add(buildCartPoint(lastX, lastY, provider.penUpZ, zoneType: "FINE"));
+  /// Odošle jeden `movMulti` balík a počká na jeho fyzické dokončenie.
+  Future<bool> sendPacket(List<Map<String, dynamic>> points) async {
+    if (!provider.status.isConnected) return false;
+
+    // 1. Nikdy neposielame pohyb počas pohybu predchádzajúceho balíka.
+    if (!await provider.waitUntilIdle()) {
+      debugPrint("⚠️ Robot nezastavil – balík sa neodosiela.");
+      return false;
+    }
+
+    final durationMs = estimatePacketDurationMs(points);
+
+    final payload = {
+      "id": DateTime.now().millisecondsSinceEpoch,
+      "type": "common",
+      "action": "movMulti",
+      "data": {
+        "type": "movCart",
+        "user": 1,
+        "tool": 1,
+        "points": points,
+      }
+    };
+
+    debugPrint(
+        "✍️ [BALÍK] ${points.length}/$maxPointsPerPacket bodov, odhad $durationMs ms");
+
+    if (!await provider.sendMotionPacket(payload,
+        estimatedDurationMs: durationMs)) {
+      return false;
+    }
+
+    // 2. Počkať na dokončenie balíka a potvrdený pokoj.
+    if (!await provider.waitUntilIdle()) {
+      debugPrint("⚠️ Balík sa nedokončil v časovom limite.");
+      return false;
+    }
+
+    return !provider.wasMotionRejected;
+  }
+
+  /// Odhad trvania balíka v ms (rýchlosť robota + rezerva na akceleráciu).
+  int estimatePacketDurationMs(List<Map<String, dynamic>> points) {
+    double distanceMm = 0.0;
+    for (int i = 0; i < points.length - 1; i++) {
+      final c1 = points[i]["target"]["cpos"] as Map;
+      final c2 = points[i + 1]["target"]["cpos"] as Map;
+      final dx = (c2["x"] as num).toDouble() - (c1["x"] as num).toDouble();
+      final dy = (c2["y"] as num).toDouble() - (c1["y"] as num).toDouble();
+      final dz = (c2["z"] as num).toDouble() - (c1["z"] as num).toDouble();
+      distanceMm += math.sqrt(dx * dx + dy * dy + dz * dz);
+    }
+
+    final speed = provider.linearSpeed <= 0 ? 250.0 : provider.linearSpeed;
+    // Controller spomaľuje pred každým FINE bodom – počítame s 60 % rýchlosti.
+    return ((distanceMm / (speed * 0.6)) * 1000).toInt() + 700;
+  }
+
+  /// Prevod normalizovaných bodov canvasu na milimetre robota
+  /// (s filtrovaním príliš krátkych úsekov).
+  List<Offset> toMillimetrePath(List<StrokePoint> stroke) {
+    final path = <Offset>[];
+
+    for (final point in stroke) {
+      final mm = toMillimetres(point);
+      if (path.isEmpty || (mm - path.last).distance >= minPointSpacingMm) {
+        path.add(mm);
+      }
+    }
+
+    // Posledný bod ťahu musí ostať zachovaný, aby pero zdvihlo na konci ťahu.
+    final last = toMillimetres(stroke.last);
+    if (path.isEmpty || (path.last - last).distance > 0.1) {
+      path.add(last);
+    }
+
+    return path;
+  }
+
+  Offset toMillimetres(StrokePoint point) =>
+      Offset((1.0 - point.y) * 297.0, (1.0 - point.x) * 210.0);
+
+  /// Nájazdové body pred klesnutím pera – pero musí byť vo vzduchu.
+  List<Map<String, dynamic>> _approachPoints(Offset target) {
+    final points = <Map<String, dynamic>>[];
+    final current = provider.status.cartPosition;
+    final positionKnown = provider.status.isConnected &&
+        !(current.x == 0.0 && current.y == 0.0 && current.z == 0.0);
+
+    if (positionKnown && current.z < provider.penUpZ - 0.5) {
+      // Pero je ešte pri papieri (napr. po prerušenom ťahu) – zdvihneme na mieste.
+      points.add(buildCartPoint(
+        current.x,
+        current.y,
+        provider.penUpZ,
+        zoneType: "FINE",
+      ));
+    }
+
+    points.add(buildCartPoint(
+      target.dx,
+      target.dy,
+      provider.penUpZ,
+      zoneType: "FINE",
+    ));
 
     return points;
   }
+
+  Map<String, dynamic> _withFineZone(Map<String, dynamic> point) => {
+        ...point,
+        "zone": {
+          "type": "FINE",
+          "data": {"zper": 0, "zdis": 0, "zvconst": 0}
+        }
+      };
 
   /// Tvorba bodu pre Codroid controller
   Map<String, dynamic> buildCartPoint(double x, double y, double z,

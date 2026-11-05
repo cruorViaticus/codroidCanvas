@@ -1,13 +1,14 @@
 {
-    "name": "codroid_pen_plotter",
-    "short_name": "codroid_pen_plotter",
+    "name": "Codroid S Pen Plotter",
+    "short_name": "Codroid Plotter",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#1A237E",
+    "theme_color": "#283593",
+    "description": "Controller for drawing with a Codroid robot arm - S Pen canvas to robot motion.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
+
     "icons": [
         {
             "src": "icons/Icon-192.png",

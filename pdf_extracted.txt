@@ -1,0 +1,1652 @@
+CodroidApi.md 2025-07-08
+1 / 41
+CodroidApi Interface Description
+This interface uses the Websocket protocol
+Access address: ws://ROBOT_IP:9000 (default: ws://192.168.101.100:9000)
+Data format: json
+Return format: json
+sendUserCommand
+Send user commands to control the robot status
+Parameter Statement Description
+Robot/Control/state: 
+        1       Power On 
+        2       Power Off 
+        3       ToManual 
+        4       TORescue 
+        5       ToAuto 
+        100     ClearError 
+        501     ClearWarning 
+        1000    ResumeFaulty 
+Example
+// json Example 
+{ 
+    "id": 1, 
+    "type": "common", 
+    "action": "setparam", 
+    "data": [ 
+        { 
+        "path": "Robot/Control/command", 
+        "value": 2 
+        } 
+    ] 
+} 
+Data Return
+CodroidApi.md 2025-07-08
+2 / 41
+// json Example 
+{ 
+    "id": 1, 
+    "type": "common", 
+    "action": "setparam", 
+    "time": 1751598417365, 
+    "code": 200, 
+    "msg": "", 
+    "data": { 
+        "msg": "", 
+        "code": 0 
+    } 
+} 
+getRobotState
+Get robot status
+Parameter Description
+Robot/Control/state: 
+        0      Initialization 
+        1      Power Off 
+        2      Maunal Mode 
+        3      Rescue Mode 
+        4      Auto Mode 
+        6      Error 
+Example
+// json Example 
+{ 
+    "id": 1, 
+    "type": "common", 
+    "action": "getparam", 
+    "data": [ 
+        "Robot/Control/state" 
+    ] 
+} 
+Data Return
+CodroidApi.md 2025-07-08
+3 / 41
+// json Example 
+{ 
+    "id": 1, 
+    "type": "common", 
+    "action": "getparam", 
+    "time": 1751600090580, 
+    "code": 200, 
+    "msg": "", 
+    "data": { 
+        "msg": "", 
+        "code": 0, 
+        "data": { 
+            "Robot/Control/state": 2 
+        } 
+    } 
+} 
+GetRobotStateFlag
+get robot stateflag
+parameter return
+parameter description
+ robotMode:  
+        "PowerOff"    Power off 
+        "Idle"        Free 
+        "Jogging"     jog Mode 
+        "Dragging"    Drag Mode 
+        "ToPoint"     Move to point 
+        "AutoReady"   Auto mode ready 
+        "AutoRunning" Auto mode running 
+        "Rescue"      Rescue mode 
+        "Fault"       Fault 
+        "other"       other 
+------------------------------------------------------------------------ 
+safetyMode ： 
+        1       Normamode  
+        2       E-stop pressed     
+        3       Rescue Mode  
+        4       Reduction Mode 
+        0       Error existed 
+------------------------------------------------------------------------ 
+statusFlag 
+0 1 2 3 4 5 6
+E-stop Power Dragging Moving (reserved) (reserved) (reserved
+CodroidApi.md 2025-07-08
+4 / 41
+Example
+// json Example 
+{ 
+    "id": 1, 
+    "type": "common", 
+    "action": "getparam", 
+    "data": [ 
+        "Robot/Control/state" 
+    ] 
+} 
+Data Return
+// json Example 
+{ 
+    "id": 1, 
+    "type": "common", 
+    "action": "getRobotStates", 
+    "time": 1751602445510, 
+    "code": 200, 
+    "msg": "", 
+    "data": { 
+        "msg": "", 
+        "code": 0, 
+        "data": { 
+            "robotMode": "PowerOff", 
+            "safetyMode": 0, 
+            "statusFlag": 256 
+        } 
+    } 
+} 
+goHome
+Move to the Home position via MovJoint.
+On
+8 9 10 11 12 13 14
+simulation 00:stop 10 ： run 01 ： pause (reserved) (reserved) (reserved) (reserved
+CodroidApi.md 2025-07-08
+5 / 41
+Parameter Description
+aper: Joint acceleration, applicable to joint space motion, Unit: degree 
+per second squared (deg/s²) 
+tcp: End effector linear acceleration, applicable to Cartesian space 
+motion, Unit: millimeters per second squared (mm/s²) 
+ori: End effector rotational angular acceleration, applicable to Cartesian 
+space motion, Unit: degree per second squared (deg/s²) 
+------------------------------------------------------------------------ 
+sper: Joint velocity, applicable to joint space motion, Unit: degree per 
+second (deg/s) 
+stcp: End effector linear velocity, applicable to Cartesian space motion, 
+Unit: millimeter per second (mm/s) 
+sori: End effector rotational angular velocity, applicable to Cartesian 
+space motion, Unit: degree per second (deg/s) 
+------------------------------------------------------------------------ 
+JntPos1: Joint 1 angle, Unit: degree (deg) 
+JntPos2: Joint 2 angle, Unit: degree (deg) 
+JntPos3: Joint 3 angle, Unit: degree (deg) 
+JntPos4: Joint 4 angle, Unit: degree (deg) 
+JntPos5: Joint 5 angle, Unit: degree (deg) 
+JntPos6: Joint 6 angle, Unit: degree (deg) 
+------------------------------------------------------------------------ 
+type: Movement Type 
+        movj - Joint angle motion 
+        movl - Cartesian space motion 
+        movC - Circular arc motion 
+Example
+// json Example 
+{ 
+    "id": 1, 
+    "type": "common", 
+    "action": "mov", 
+    "data": { 
+        "acc": { 
+            "aexjl": 0, 
+            "aexjr": 0, 
+            "aori": 0, 
+            "aper": 80.0, 
+            "atcp": 0, 
+        }, 
+        "speed": { 
+            "sexjl": 0, 
+            "sexjr": 0, 
+            "sori": 0, 
+            "sper": 60.0, 
+            "stcp": 0, 
+CodroidApi.md 2025-07-08
+6 / 41
+        }, 
+        "target": { 
+            "apos": { 
+                "jntpos1": 0.0, 
+                "jntpos2": 0.0, 
+                "jntpos3": 90.0, 
+                "jntpos4": 0.0, 
+                "jntpos5": 90.0, 
+                "jntpos6": 0.0, 
+            } 
+        }, 
+        "type": "movj", 
+    } 
+} 
+Data Return
+// json Example 
+{"id": 1, 
+    "type": "common", 
+    "action": "mov", 
+    "time": 0, 
+    "code": 200, 
+    "msg": "", 
+    "data": { 
+        "msg": "", 
+        "code": 0 
+    }, 
+    "timestamp": 1751605557322 
+} 
+goPack
+Move to package positon via MovJoint.
+parameter description
+aper: Joint acceleration, applicable to joint space motion, Unit: degree 
+per second squared (deg/s²) 
+tcp: End effector linear acceleration, applicable to Cartesian space 
+motion, Unit: millimeters per second squared (mm/s²) 
+ori: End effector rotational angular acceleration, applicable to Cartesian 
+space motion, Unit: degree per second squared (deg/s²) 
+------------------------------------------------------------------------ 
+sper: Joint velocity, applicable to joint space motion, Unit: degree per 
+CodroidApi.md 2025-07-08
+7 / 41
+second (deg/s) 
+stcp: End effector linear velocity, applicable to Cartesian space motion, 
+Unit: millimeter per second (mm/s) 
+sori: End effector rotational angular velocity, applicable to Cartesian 
+space motion, Unit: degree per second (deg/s) 
+------------------------------------------------------------------------ 
+JntPos1: Joint 1 angle, Unit: degree (deg) 
+JntPos2: Joint 2 angle, Unit: degree (deg) 
+JntPos3: Joint 3 angle, Unit: degree (deg) 
+JntPos4: Joint 4 angle, Unit: degree (deg) 
+JntPos5: Joint 5 angle, Unit: degree (deg) 
+JntPos6: Joint 6 angle, Unit: degree (deg) 
+------------------------------------------------------------------------ 
+type: Movement Type 
+        movj - Joint angle motion 
+        movl - Cartesian space motion 
+        movC - Circular arc motion 
+Example
+// json Example 
+{ 
+    "id": 1, 
+    "type": "common", 
+    "action": "mov", 
+    "data": { 
+        "acc": { 
+            "aexjl": 0, 
+            "aexjr": 0, 
+            "aori": 0, 
+            "aper": 80.0, 
+            "atcp": 0, 
+        }, 
+        "speed": { 
+            "sexjl": 0, 
+            "sexjr": 0, 
+            "sori": 0, 
+            "sper": 60.0, 
+            "stcp": 0, 
+        }, 
+        "target": { 
+            "apos": { 
+                "jntpos1": 89.0, 
+                "jntpos2": 0.0, 
+                "jntpos3": 148.3, 
+                "jntpos4": -31.7, 
+                "jntpos5": 181.0, 
+                "jntpos6": 180.0, 
+            } 
+        }, 
+CodroidApi.md 2025-07-08
+8 / 41
+        "type": "movj", 
+    } 
+} 
+Data Return
+// json Example 
+{"id": 1, 
+    "type": "common", 
+    "action": "mov", 
+    "time": 0, 
+    "code": 200, 
+    "msg": "", 
+    "data": { 
+        "msg": "", 
+        "code": 0 
+    }, 
+    "timestamp": 1751605557322 
+} 
+getJointPosition
+get current joint angle.
+parameter description
+JntPos1: Joint 1 angle, Unit: degree (deg) 
+JntPos2: Joint 2 angle, Unit: degree (deg) 
+JntPos3: Joint 3 angle, Unit: degree (deg) 
+JntPos4: Joint 4 angle, Unit: degree (deg) 
+JntPos5: Joint 5 angle, Unit: degree (deg) 
+JntPos6: Joint 6 angle, Unit: degree (deg) 
+Example
+// json Example 
+{ 
+    "action": "getCurAPos", 
+    "data": [], 
+    "id": 1, 
+    "type": "common" 
+} 
+CodroidApi.md 2025-07-08
+9 / 41
+Data Return
+// json Example 
+{ 
+    "id": 1, 
+    "type": "common", 
+    "action": "getCurAPos", 
+    "time": 1751606308602, 
+    "code": 200, 
+    "msg": "", 
+    "data": { 
+        "msg": "", 
+        "code": 0, 
+        "data": { 
+          "jntpos1": 876.61587440146477, 
+          "jntpos2": 57.33075656278813, 
+          "jntpos3": 126.62153652381899, 
+          "jntpos4": 93.88294191870472, 
+          "jntpos5": 89.98211038550235, 
+          "jntpos6": -10.684886373554338, 
+          "jntpos7": 0.0, 
+          "exjntpos1": 0.0, 
+          "exjntpos2": 0.0, 
+          "exjntpos3": 0.0, 
+          "exjntpos4": 0.0, 
+          "exjntpos5": 0.0, 
+          "exjntpos6": 0.0, 
+          "exjntpos7": 0.0, 
+          "exjntpos8": 0.0, 
+          "exjntpos9": 0.0, 
+          "exjntpos10": 0.0 
+        } 
+    } 
+} 
+getCartPosition
+ger current cartesian coordinate.
+Parameter Description
+x: Cartesian coordinate X, Unit: millimeter (mm) 
+y: Cartesian coordinate Y, Unit: millimeter (mm) 
+z: Cartesian coordinate Z, Unit: millimeter (mm) 
+CodroidApi.md 2025-07-08
+10 / 41
+a: Cartesian coordinate Rx, Unit: degree (deg) 
+b: Cartesian coordinate Ry, Unit: degree (deg) 
+c: Cartesian coordinate Rz, Unit: degree (deg) 
+Example
+// json Example 
+{ 
+    "action": "getCurCPos", 
+    "data": [], 
+    "id": 1, 
+    "type": "common" 
+} 
+Data Return
+// json Example 
+{ 
+    "id": 1, 
+    "type": "common", 
+    "action": "getCurCPos", 
+    "time": 1751606496996, 
+    "code": 200, 
+    "msg": "", 
+    "data": { 
+        "msg": "", 
+        "code": 0, 
+        "data": { 
+          "x": 876.61587440146477, 
+          "y": 57.33075656278813, 
+          "z": 126.62153652381899, 
+          "a": 93.88294191870472, 
+          "b": 89.98211038550235, 
+          "c": -10.684886373554338, 
+          "e": -1.5332869081961244e+47, 
+          "exjntpos1": -2.9526277411679495e+45, 
+          "exjntpos2": -9.624317782146035e+45, 
+          "exjntpos3": -2.952608558205393e+45, 
+          "exjntpos4": -2.952627737764832e+45, 
+          "exjntpos5": -1.6428721721953514e+50, 
+          "exjntpos6": 4.863256121504e-312, 
+          "exjntpos7": -3.6255865004017474e+268, 
+          "exjntpos8": 5.81790623342e-312, 
+          "exjntpos9": -9.718802041979046e+46, 
+          "exjntpos10": 2.83e-321, 
+          "poscfg": { 
+CodroidApi.md 2025-07-08
+11 / 41
+              "mode": 0, 
+              "cf1": -922583920, 
+              "cf2": -363587616, 
+              "cf3": -894318592, 
+              "cf4": -884518912, 
+              "cf5": -906250320, 
+              "cf6": -922584020, 
+              "cf7": -889949392 
+          } 
+        } 
+    } 
+} 
+movJoint
+Joint movement.
+parameter description
+aper: Joint acceleration, applicable to joint space motion, Unit: degree 
+per second squared (deg/s²) 
+tcp: End effector linear acceleration, applicable to Cartesian space 
+motion, Unit: millimeters per second squared (mm/s²) 
+ori: End effector rotational angular acceleration, applicable to Cartesian 
+space motion, Unit: degree per second squared (deg/s²) 
+------------------------------------------------------------------------ 
+sper: Joint velocity, applicable to joint space motion, Unit: degree per 
+second (deg/s) 
+stcp: End effector linear velocity, applicable to Cartesian space motion, 
+Unit: millimeter per second (mm/s) 
+sori: End effector rotational angular velocity, applicable to Cartesian 
+space motion, Unit: degree per second (deg/s) 
+------------------------------------------------------------------------ 
+JntPos1: Joint 1 angle, Unit: degree (deg) 
+JntPos2: Joint 2 angle, Unit: degree (deg) 
+JntPos3: Joint 3 angle, Unit: degree (deg) 
+JntPos4: Joint 4 angle, Unit: degree (deg) 
+JntPos5: Joint 5 angle, Unit: degree (deg) 
+JntPos6: Joint 6 angle, Unit: degree (deg) 
+------------------------------------------------------------------------ 
+type: Movement Type 
+        movj - Joint angle motion 
+        movl - Cartesian space motion 
+        movC - Circular arc motion 
+Example
+CodroidApi.md 2025-07-08
+12 / 41
+// json Example 
+{ 
+    "id": 1, 
+    "type": "common", 
+    "action": "mov", 
+    "data": { 
+        "acc": { 
+            "aexjl": 0, 
+            "aexjr": 0, 
+            "aori": 0, 
+            "aper": 80.0, 
+            "atcp": 0, 
+        }, 
+        "speed": { 
+            "sexjl": 0, 
+            "sexjr": 0, 
+            "sori": 0, 
+            "sper": 60.0, 
+            "stcp": 0, 
+        }, 
+        "target": { 
+            "apos": { 
+                "jntpos1": 89.0, 
+                "jntpos2": 0.0, 
+                "jntpos3": 148.3, 
+                "jntpos4": -31.7, 
+                "jntpos5": 181.0, 
+                "jntpos6": 180.0, 
+            } 
+        }, 
+        "type": "movj", 
+    } 
+} 
+Data Return
+// json Example 
+{ 
+    "id": 1, 
+    "type": "common", 
+    "action": "mov", 
+    "time": 0, 
+    "code": 200, 
+    "msg": "", 
+    "data": { 
+        "msg": "", 
+        "code": 0 
+CodroidApi.md 2025-07-08
+13 / 41
+    }, 
+    "timestamp": 1751606785838 
+} 
+movLine
+line motion.
+parameter description
+aper: Joint acceleration, applicable to joint space motion, Unit: degree 
+per second squared (deg/s²) 
+tcp: End effector linear acceleration, applicable to Cartesian space 
+motion, Unit: millimeters per second squared (mm/s²) 
+ori: End effector rotational angular acceleration, applicable to Cartesian 
+space motion, Unit: degree per second squared (deg/s²) 
+------------------------------------------------------------------------ 
+sper: Joint velocity, applicable to joint space motion, Unit: degree per 
+second (deg/s) 
+stcp: End effector linear velocity, applicable to Cartesian space motion, 
+Unit: millimeter per second (mm/s) 
+sori: End effector rotational angular velocity, applicable to Cartesian 
+space motion, Unit: degree per second (deg/s) 
+------------------------------------------------------------------------ 
+JntPos1: Joint 1 angle, Unit: degree (deg) 
+JntPos2: Joint 2 angle, Unit: degree (deg) 
+JntPos3: Joint 3 angle, Unit: degree (deg) 
+JntPos4: Joint 4 angle, Unit: degree (deg) 
+JntPos5: Joint 5 angle, Unit: degree (deg) 
+JntPos6: Joint 6 angle, Unit: degree (deg) 
+------------------------------------------------------------------------ 
+type: Movement Type 
+        movj - Joint angle motion 
+        movl - Cartesian space motion 
+        movC - Circular arc motion 
+Example
+// json Example 
+{ 
+    "id": 1, 
+    "type": "common", 
+    "action": "mov", 
+    "data": { 
+        "acc": { 
+            "aexjl": 0, 
+CodroidApi.md 2025-07-08
+14 / 41
+            "aexjr": 0, 
+            "aori": 0, 
+            "aper": 80.0, 
+            "atcp": 0, 
+        }, 
+        "speed": { 
+            "sexjl": 0, 
+            "sexjr": 0, 
+            "sori": 0, 
+            "sper": 60.0, 
+            "stcp": 0, 
+        }, 
+        "target": { 
+            "cpos": { 
+                "x": 89.0, 
+                "y": 0.0, 
+                "z": 148.3, 
+                "a": -31.7, 
+                "b": 181.0, 
+                "c": 180.0, 
+                "poscfg": { 
+                    "cf1": 0, 
+                    "cf2": 0, 
+                    "cf3": 0, 
+                    "cf4": 0, 
+                    "cf5": 0, 
+                    "cf6": 0, 
+                    "mode": -1 
+                }, 
+            } 
+        }, 
+        "type": "movl" 
+    } 
+} 
+Data Return
+// json Example 
+{ 
+    "id": 1, 
+    "type": "common", 
+    "action": "mov", 
+    "time": 0, 
+    "code": 200, 
+    "msg": "", 
+    "data": { 
+        "msg": "", 
+        "code": 0 
+    }, 
+CodroidApi.md 2025-07-08
+15 / 41
+    "timestamp": 1751606785838 
+} 
+stopMove
+stop movement
+parameter description
+Example
+// json Example 
+{ 
+"action": "stopMov", 
+"data": [], 
+"id": 1, 
+"type": "common" 
+} 
+Data Return
+// json Example 
+{ 
+    "id": 1, 
+    "type": "common", 
+    "action": "stopMov", 
+    "time": 1751607089963, 
+    "code": 200, 
+    "msg": "", 
+    "data": { 
+        "msg": "", 
+        "code": 0 
+    } 
+} 
+jointJog
+joint jog movement.
+CodroidApi.md 2025-07-08
+16 / 41
+parameter description
+jogIndex ： Specifies the axis to be jogged, with values ranging from 1 to 6 
+jogSpeed (Positive value indicates motion in the positive direction; 
+negative value indicates motion in the negative direction) 
+    low = 1 
+    mid = 2 
+    high = 3 
+Example
+// json Example 
+{ 
+    "action": "setparam", 
+    "data": [ 
+        { 
+            "path": "Robot/Control/jogMode", 
+            "value": 1, 
+        }, 
+        { 
+            "path": "Robot/Control/jogSpeed", 
+            "value": -1 
+        }, 
+        { 
+            "path": "Robot/Control/jogIndex", 
+            "value": 1 
+        } 
+    ], 
+    "id": 1, 
+    "type": "common" 
+} 
+Data Return
+// json Example 
+{ 
+    "id": 1, 
+    "type": "common", 
+    "action": "setparam", 
+    "time": 1751607344056, 
+    "code": 200, 
+    "msg": "", 
+    "data": { 
+        "msg": "", 
+CodroidApi.md 2025-07-08
+17 / 41
+        "code": 0 
+    } 
+} 
+tcpJog
+cartesian coordinate jog.
+parameter description
+jogIndex ： Specifies the direction to be jogged 
+1(x),2(y),3(z),4(rx),5(ry),6(rz) 
+jogSpeed (Positive value indicates motion in the positive direction; 
+negative value indicates motion in the negative direction) 
+    low = 1 
+    mid = 2 
+    high = 3 
+Example
+// json Example 
+{ 
+    "action": "setparam", 
+    "data": [ 
+        { 
+            "path": "Robot/Control/jogMode", 
+            "value": 2 
+        }, 
+        { 
+            "path": "Robot/Control/jogSpeed", 
+            "value": -1 
+        }, 
+        { 
+            "path": "Robot/Control/jogIndex", 
+            "value": 1 
+        } 
+    ], 
+    "id": 1, 
+    "type": "common" 
+} 
+Data Return
+CodroidApi.md 2025-07-08
+18 / 41
+// json Example 
+{ 
+    "id": 1, 
+    "type": "common", 
+    "action": "setparam", 
+    "time": 1751607479706, 
+    "code": 200, 
+    "msg": "", 
+    "data": { 
+        "msg": "", 
+        "code": 0 
+    } 
+} 
+keepjog
+Keep jogging ， After calling jointJog or tcpJog, invoke this interface within 500ms and continue to call it at approximately
+500ms intervals to maintain continuous jogging motion.
+parameter description
+value ： Timestamp (millisecond-level, 13 digits): the number of seconds 
+elapsed since midnight UTC/GMT on January 1, 1970 (ignoring leap seconds), 
+used to represent a point in time. 
+Example
+// json Example 
+{ 
+    "action": "setparam", 
+    "data": [ 
+        { 
+            "path": "Robot/Control/commandHeart", 
+            "value": {{$date.millisecondsTimestamp}} 
+        } 
+    ], 
+    "id": 1, 
+    "type": "common" 
+} 
+Data Return
+CodroidApi.md 2025-07-08
+19 / 41
+// json Example 
+{ 
+    "id": 1, 
+    "type": "common", 
+    "action": "setparam", 
+    "time": 1751607479706, 
+    "code": 200, 
+    "msg": "", 
+    "data": { 
+        "msg": "", 
+        "code": 0 
+    } 
+} 
+stopjog
+stop jogging motion immediately
+parameter description
+Example
+// json Example 
+{ 
+    "action": "setparam", 
+    "data": [ 
+        { 
+            "path": "Robot/Control/jogMode", 
+            "value": 0 
+        }, 
+        { 
+            "path": "Robot/Control/jogSpeed", 
+            "value": 0 
+        }, 
+        { 
+            "path": "Robot/Control/jogIndex", 
+            "value": 0 
+        } 
+    ], 
+    "id": 1, 
+    "type": "common" 
+} 
+CodroidApi.md 2025-07-08
+20 / 41
+Data Return
+// json Example 
+{ 
+    "id": 1, 
+    "type": "common", 
+    "action": "setparam", 
+    "time": 1751607803037, 
+    "code": 200, 
+    "msg": "", 
+    "data": { 
+        "msg": "", 
+        "code": 0 
+    } 
+} 
+getDI
+get digital input
+parameter description
+port: number 
+        DI0 ： 0 
+        DI1 ： 1 
+        DI2 ： 2 
+        DI3 ： 3 
+        DI4 ： 4 
+        DI5 ： 5 
+        DI6 ： 6 
+        DI7 ： 7 
+        DI8 ： 8 
+        DI9 ： 9 
+        DI10 ： 10 
+        DI11 ： 11 
+        DI12 ： 12 
+        DI13 ： 13 
+        DI14 ： 14 
+        DI15 ： 15 
+        modeSwitch ： 32 
+        enableButton ： 33 
+        flangeButton0 ： 40 
+        flangeButton1 ： 41 
+        flangeButton2 ： 42 
+        flangeButton3 ： 43 
+        flangeDI0 ： 44 
+CodroidApi.md 2025-07-08
+21 / 41
+        flangeDI1 ： 45 
+data : data returned 
+      1 ： input 
+      0 ： no input 
+Example
+// json Example 
+{ 
+    "action": "getDI", 
+    "data": { 
+        "port": 0 
+    }, 
+    "id": 1, 
+    "type": "common" 
+} 
+Data Return
+// json Example 
+{ 
+    "id": 1, 
+    "type": "common", 
+    "action": "getDI", 
+    "time": 1751607818693, 
+    "code": 200, 
+    "msg": "", 
+    "data": { 
+        "msg": "", 
+        "code": 0, 
+        "data": 1 
+    } 
+} 
+getDIGroup
+get continous digital input
+parameter description
+startPort: number 
+endPort: number 
+CodroidApi.md 2025-07-08
+22 / 41
+        DI0 ： 0 
+        DI1 ： 1 
+        DI2 ： 2 
+        DI3 ： 3 
+        DI4 ： 4 
+        DI5 ： 5 
+        DI6 ： 6 
+        DI7 ： 7 
+        DI8 ： 8 
+        DI9 ： 9 
+        DI10 ： 10 
+        DI11 ： 11 
+        DI12 ： 12 
+        DI13 ： 13 
+        DI14 ： 14 
+        DI15 ： 15 
+        modeSwitch ： 32 
+        enableButton ： 33 
+        flangeButton0 ： 40 
+        flangeButton1 ： 41 
+        flangeButton2 ： 42 
+        flangeButton3 ： 43 
+        flangeDI0 ： 44 
+        flangeDI1 ： 45 
+data : data returned 
+      The data is returned in decimal format. Convert it to binary for 
+parsing, where the bits from least significant to most significant 
+correspond to DI0 through DI15. 
+      If the return value is 65535, its binary representation is 
+1111111111111111, indicating DI0 through DI15 are all 1. 
+      If the return value is 11111, its binary representation is 
+0010101101100111, indicating DI0 through DI2, DI5, DI6, DI8, DI9, DI11, 
+and DI13 are 1. 
+Example
+// json Example 
+{ 
+    "action": "getDIGroup", 
+    "data": { 
+        "startPort": 0, 
+        "endPort": 15 
+    }, 
+    "id": 1, 
+    "type": "common" 
+} 
+Data Return
+CodroidApi.md 2025-07-08
+23 / 41
+// json Example 
+{ 
+    "id": 1, 
+    "type": "common", 
+    "action": "getDIGroup", 
+    "time": 1751607818693, 
+    "code": 200, 
+    "msg": "", 
+    "data": { 
+        "msg": "", 
+        "code": 0, 
+        "data": 65535 
+    } 
+} 
+setDO
+Set digital output
+parameter description
+startPort: number 
+endPort: number 
+        DO0 ： 16 
+        DO1 ： 17 
+        DO2 ： 18 
+        DO3 ： 19 
+        DO4 ： 20 
+        DO5 ： 21 
+        DO6 ： 22 
+        DO7 ： 23 
+        DO8 ： 24 
+        DO9 ： 25 
+        DO10 ： 26 
+        DO11 ： 27 
+        DO12 ： 28 
+        DO13 ： 29 
+        DO14 ： 30 
+        DO15 ： 31 
+        flangeDO0 ： 46 
+        flangeDO1 ： 47 
+val : set output value   
+      only 0 or 1 
+Example
+CodroidApi.md 2025-07-08
+24 / 41
+// json Example 
+{ 
+    "action": "setDO", 
+    "data": { 
+         "port": 16, 
+         "val": 0 
+    }, 
+    "id": 1, 
+    "type": "common" 
+} 
+Data Return
+// json Example 
+{ 
+    "id": 1, 
+    "type": "common", 
+    "action": "setDO", 
+    "time": 1751608645949, 
+    "code": 200, 
+    "msg": "", 
+    "data": { 
+        "msg": "", 
+        "code": 0 
+    } 
+} 
+setDOGroup
+get continous digital output
+parameter description
+startPort: number 
+endPort: number 
+        DO0 ： 16 
+        DO1 ： 17 
+        DO2 ： 18 
+        DO3 ： 19 
+        DO4 ： 20 
+        DO5 ： 21 
+        DO6 ： 22 
+        DO7 ： 23 
+        DO8 ： 24 
+CodroidApi.md 2025-07-08
+25 / 41
+        DO9 ： 25 
+        DO10 ： 26 
+        DO11 ： 27 
+        DO12 ： 28 
+        DO13 ： 29 
+        DO14 ： 30 
+        DO15 ： 31 
+        flangeDO0 ： 46 
+        flangeDO1 ： 47 
+val : set output value 
+      The data is in decimal. Convert it to binary for parsing, where the 
+bits from the least significant to the most significant correspond to DO0 
+to DO15 in sequence. 
+      For 65535, converting it to a binary code gives 1111111111111111, 
+which means DO0 to DO15 are all 1. 
+      If 11111 is set, converting it to a binary code gives 
+0010101101100111, which means DO0 to DO2, DO5, DO6, DO8, DO9, DO11, and 
+DO13 are 1. 
+Example
+// json Example 
+{ 
+    "action": "setDOGroup", 
+    "data": { 
+        "startPort": 0, 
+        "endPort": 15, 
+        "val": 257347 
+    }, 
+    "id": 1, 
+    "type": "common" 
+} 
+Data Return
+// json Example 
+{ 
+    "id": 1, 
+    "type": "common", 
+    "action": "setDOGroup", 
+    "time": 1751608873114, 
+    "code": 200, 
+    "msg": "", 
+    "data": { 
+        "msg": "", 
+        "code": 0 
+CodroidApi.md 2025-07-08
+26 / 41
+    } 
+} 
+rs485Init
+initialise 485 interface
+parameter description
+type: Specifies the interface type   
+  "RS485": Controller RS485 interface   
+  "EC2RS485": End-effector RS485 interface   
+baudrate: Baud rate   
+stopBit: Stop bits   
+  0: 1 stop bit   
+  2: 2 stop bits   
+parity: Parity check   
+  0: None   
+  1: Odd parity   
+  2: Even parity   
+dataBit: Data bits   
+  Note: The data bits for the EC2RS485 interface are fixed at 8 and cannot 
+be changed  
+Example
+// json Example 
+{    
+    "id": 1, 
+    "type": "RS485", 
+    "action": "init", 
+    "data": { 
+      "baudrate": 115200, 
+      "stopBit": 0, 
+      "parity": 0, 
+      "dataBit": 8 
+    } 
+} 
+Data Return
+CodroidApi.md 2025-07-08
+27 / 41
+// json Example 
+{ 
+    "id": 1, 
+    "type": "common", 
+    "action": "setparam", 
+    "time": 1751609399605, 
+    "code": 200, 
+    "msg": "", 
+    "data": { 
+        "msg": "", 
+        "code": 0 
+    } 
+} 
+rs485Write
+send data via RS485
+parameter description
+type Specified interfaces: 
+        "RS485": Controller's RS485 interface, 
+        "EC2RS485": RS485 interface at the end of the robotic arm 
+data: Data to be sent, array type, decimal numbers 
+        [10, 20, 30, 40] 
+Example
+// json Example 
+{    
+    "id": 2, 
+    "type": "RS485", 
+    "action": "write", 
+    "data": [11,12,16,17], 
+    } 
+Data Return
+// json Example 
+{ 
+CodroidApi.md 2025-07-08
+28 / 41
+    "id": 2, 
+    "type": "RS485", 
+    "action": "write", 
+    "time": 1751609593398, 
+    "code": 200, 
+    "msg": "", 
+    "data": { 
+        "msg": "", 
+        "code": 0 
+    } 
+} 
+rs485Read
+receive data via RS485
+parameter description
+type Specified interfaces: 
+        "RS485": Controller's RS485 interface, 
+        "EC2RS485": RS485 interface at the end of the robotic arm 
+length: Specifies the length of received data
+timeout: Interface timeout time, unit: second
+data: Received data, array
+Example
+// json Example 
+{ 
+    "id": 3, 
+    "type": "RS485", 
+    "action": "read", 
+    "data": { 
+      "length": 3, 
+      "timeout": 50 
+    } 
+} 
+Data Return
+CodroidApi.md 2025-07-08
+29 / 41
+// json Example 
+{ 
+    "id": 3, 
+    "type": "RS485", 
+    "action": "read", 
+    "time": 1751609861358, 
+    "code": 200, 
+    "msg": "", 
+    "data": { 
+        "msg": "", 
+        "code": 10000, 
+        "data": [ 
+            17, 
+            0, 
+            17 
+        ] 
+    } 
+} 
+rs485FlushReadBuffer
+Clear the read - buffer of the RS485 interface
+parameter description
+type Specified interfaces: 
+        "RS485": Controller RS485 interface, 
+        "EC2RS485": RS485 interface at the end of the robotic arm 
+Example
+// json Example 
+{    
+    "id": 1, 
+    "type": "RS485", 
+    "action": "flushReadBuffer", 
+    "data": { 
+    } 
+} 
+Data Return
+CodroidApi.md 2025-07-08
+30 / 41
+// json Example 
+{ 
+    "id": 1, 
+    "type": "RS485", 
+    "action": "flushReadBuffer", 
+    "time": 1751610281178, 
+    "code": 200, 
+    "msg": "", 
+    "data": { 
+        "msg": "", 
+        "code": 0 
+    } 
+} 
+getProjectState
+get project status
+parameter description
+data  project status 
+      * IDLE: Idle, no project is running   
+      * LOADING: Loading the project   
+      * RUNNING: The project is running   
+      * PAUSE: The project has been paused   
+      * ERROR: An error occurred during project operation 
+Example
+// json Example 
+{ 
+    "action": "getProjectState", 
+    "data": {}, 
+    "id": 1, 
+    "type": "projexecute" 
+} 
+Data Return
+CodroidApi.md 2025-07-08
+31 / 41
+// json Example 
+{ 
+    "id": 1, 
+    "type": "projexecute", 
+    "action": "getProjectState", 
+    "time": 1751610427211, 
+    "code": 200, 
+    "msg": "", 
+    "data": { 
+        "msg": "", 
+        "code": 0, 
+        "data": "IDLE" 
+    } 
+} 
+runProject
+run the specific project
+parameter description
+projectName   
+taskName  If there is no change, the default is "main1" 
+Example
+// json Example 
+{ 
+    "action": "run", 
+    "data": { 
+      "projectName": "PPP", 
+      "taskName": "main1" 
+    }, 
+    "id": 1, 
+    "type": "projexecute" 
+} 
+Data Return
+CodroidApi.md 2025-07-08
+32 / 41
+// json Example 
+{ 
+    "id": 1, 
+    "type": "projexecute", 
+    "action": "run", 
+    "time": 1751610640841, 
+    "code": 200, 
+    "msg": "", 
+    "data": { 
+        "msg": "", 
+        "code": 0 
+    } 
+} 
+runLastProject
+run the specific project
+parameter description
+Example
+// json Example 
+{ 
+    "action": "runLast", 
+    "data": {}, 
+    "id": 1, 
+    "type": "projexecute" 
+} 
+Data Return
+// json Example 
+{ 
+    "id": 1, 
+    "type": "projexecute", 
+    "action": "runLast", 
+    "time": 1751610721459, 
+    "code": 200, 
+CodroidApi.md 2025-07-08
+33 / 41
+    "msg": "", 
+    "data": { 
+        "msg": "", 
+        "code": 0 
+    } 
+} 
+pauseProject
+pause the project
+parameter description
+Example
+// json Example 
+{ 
+    "action": "pause", 
+    "data": {}, 
+    "id": 1, 
+    "type": "projexecute" 
+} 
+Data Return
+// json Example 
+{ 
+    "id": 1, 
+    "type": "projexecute", 
+    "action": "pause", 
+    "time": 1751610721459, 
+    "code": 200, 
+    "msg": "", 
+    "data": { 
+        "msg": "", 
+        "code": 0 
+    } 
+} 
+CodroidApi.md 2025-07-08
+34 / 41
+resumeProject
+resume the pause project
+parameter description
+Example
+// json Example 
+{ 
+    "action": "resume", 
+    "data": {}, 
+    "id": 1, 
+    "type": "projexecute" 
+} 
+Data Return
+// json Example 
+{ 
+    "id": 1, 
+    "type": "projexecute", 
+    "action": "resume", 
+    "time": 1751610721459, 
+    "code": 200, 
+    "msg": "", 
+    "data": { 
+        "msg": "", 
+        "code": 0 
+    } 
+} 
+stopProject
+stop current project
+parameter description
+CodroidApi.md 2025-07-08
+35 / 41
+Example
+// json Example 
+{ 
+    "action": "stop", 
+    "data": {}, 
+    "id": 1, 
+    "type": "projexecute" 
+} 
+Data Return
+// json Example 
+{ 
+    "id": 1, 
+    "type": "projexecute", 
+    "action": "stop", 
+    "time": 1751610721459, 
+    "code": 200, 
+    "msg": "", 
+    "data": { 
+        "msg": "", 
+        "code": 0 
+    } 
+} 
+MovJSegments
+continous joint motion(30 positions maximum)
+parameter description
+aper: Joint acceleration, applicable to joint space motion, Unit: degree 
+per second squared (deg/s²) 
+tcp: End effector linear acceleration, applicable to Cartesian space 
+motion, Unit: millimeters per second squared (mm/s²) 
+ori: End effector rotational angular acceleration, applicable to Cartesian 
+space motion, Unit: degree per second squared (deg/s²) 
+------------------------------------------------------------------------ 
+sper: Joint velocity, applicable to joint space motion, Unit: degree per 
+second (deg/s) 
+stcp: End effector linear velocity, applicable to Cartesian space motion, 
+CodroidApi.md 2025-07-08
+36 / 41
+Unit: millimeter per second (mm/s) 
+sori: End effector rotational angular velocity, applicable to Cartesian 
+space motion, Unit: degree per second (deg/s) 
+------------------------------------------------------------------------ 
+JntPos1: Joint 1 angle, Unit: degree (deg) 
+JntPos2: Joint 2 angle, Unit: degree (deg) 
+JntPos3: Joint 3 angle, Unit: degree (deg) 
+JntPos4: Joint 4 angle, Unit: degree (deg) 
+JntPos5: Joint 5 angle, Unit: degree (deg) 
+JntPos6: Joint 6 angle, Unit: degree (deg) 
+------------------------------------------------------------------------ 
+type: Movement Type 
+        movj - Joint angle motion 
+        movl - Cartesian space motion 
+        movC - Circular arc motion 
+------------------------------------------------------------------------ 
+type: Movement Type 
+        apos - axis coordinate 
+        cpos - Cartesian coordinate 
+------------------------------------------------------------------------ 
+zper:  
+zdis: 
+zvconst: 
+Example
+// json Example 
+ { 
+    "id": 1, 
+    "type": "common", 
+    "action": "movMulti", 
+    "data": { 
+        "type": "movJoint", 
+        "points": [ 
+            { 
+              "target": { 
+                  "type": "apos", 
+                  "apos": { 
+                      "jntpos1": 90, 
+                      "jntpos2": 0, 
+                      "jntpos3": 90, 
+                      "jntpos4": 0, 
+                      "jntpos5": 90, 
+                      "jntpos6": 0, 
+                  } 
+              }, 
+              "speed": { 
+                  "sori": 0, 
+                  "sper": 60.0, 
+                  "stcp": 0, 
+CodroidApi.md 2025-07-08
+37 / 41
+                  "sexjl": 0, 
+                  "sexjr": 0 
+              }, 
+              "acc": { 
+                  "aori": 0, 
+                  "aper": 80.0, 
+                  "atcp": 0, 
+                  "aexjl": 0, 
+                  "aexjr": 0 
+              }, 
+              "zone": { 
+                  "type": "FINE", 
+                  "data": { 
+                    "zper": 0, 
+                    "zdis": 0, 
+                    "zvconst": 0 
+                  } 
+              } 
+            }, 
+            { 
+              "target": { 
+                  "type": "cpos", 
+                  "cpos": { 
+                      "x": 89.0, 
+                      "y": 0.0, 
+                      "z": 148.3, 
+                      "a": -31.7, 
+                      "b": 181.0, 
+                      "c": 180.0, 
+                      "poscfg": { 
+                          "mode": -1, 
+                          "cf1": 0, 
+                          "cf2": 0, 
+                          "cf3": 0, 
+                          "cf4": 0, 
+                          "cf5": 0, 
+                          "cf6": 0, 
+                          "cf7": 0 
+                      } 
+                  } 
+              }, 
+              "speed": { 
+                  "sori": 0, 
+                  "sper": 60.0, 
+                  "stcp": 0, 
+                  "sexjl": 0, 
+                  "sexjr": 0 
+              }, 
+              "acc": { 
+                  "aori": 0, 
+                  "aper": 80.0, 
+                  "atcp": 0, 
+                  "aexjl": 0, 
+                  "aexjr": 0 
+CodroidApi.md 2025-07-08
+38 / 41
+              }, 
+              "zone": { 
+                  "type": "FINE", 
+                  "data": { 
+                      "zper": 0, 
+                      "zdis": 0, 
+                      "zvconst": 0 
+                  } 
+                } 
+            } 
+        ] 
+    } 
+} 
+Data Return
+// json Example 
+{ 
+    "id": 1, 
+    "type": "common", 
+    "action": "movMulti", 
+    "time": 0, 
+    "code": 200, 
+    "msg": "", 
+    "data": { 
+        "msg": "", 
+        "code": 0 
+    }, 
+    "timestamp": 1751862514562 
+} 
+MovLSegments
+continous line motion(30 positions maximum)
+parameter description
+aper: Joint acceleration, applicable to joint space motion, Unit: degree 
+per second squared (deg/s²) 
+tcp: End effector linear acceleration, applicable to Cartesian space 
+motion, Unit: millimeters per second squared (mm/s²) 
+ori: End effector rotational angular acceleration, applicable to Cartesian 
+space motion, Unit: degree per second squared (deg/s²) 
+------------------------------------------------------------------------ 
+sper: Joint velocity, applicable to joint space motion, Unit: degree per 
+CodroidApi.md 2025-07-08
+39 / 41
+second (deg/s) 
+stcp: End effector linear velocity, applicable to Cartesian space motion, 
+Unit: millimeter per second (mm/s) 
+sori: End effector rotational angular velocity, applicable to Cartesian 
+space motion, Unit: degree per second (deg/s) 
+------------------------------------------------------------------------ 
+JntPos1: Joint 1 angle, Unit: degree (deg) 
+JntPos2: Joint 2 angle, Unit: degree (deg) 
+JntPos3: Joint 3 angle, Unit: degree (deg) 
+JntPos4: Joint 4 angle, Unit: degree (deg) 
+JntPos5: Joint 5 angle, Unit: degree (deg) 
+JntPos6: Joint 6 angle, Unit: degree (deg) 
+------------------------------------------------------------------------ 
+type: Movement Type 
+        movj - Joint angle motion 
+        movl - Cartesian space motion 
+        movC - Circular arc motion 
+------------------------------------------------------------------------ 
+type: Movement Type 
+        apos - axis coordinate 
+        cpos - Cartesian coordinate 
+------------------------------------------------------------------------ 
+zper:  
+zdis: 
+zvconst: 
+Example
+// json Example 
+ { 
+    "id": 1, 
+    "type": "common", 
+    "action": "movMulti", 
+    "data": { 
+        "type": "movCart", 
+        "points": [ 
+            { 
+              "type": "movl", 
+              "target": { 
+                  "type": "apos", 
+                  "apos": { 
+                      "jntpos1": 90, 
+                      "jntpos2": 0, 
+                      "jntpos3": 90, 
+                      "jntpos4": 0, 
+                      "jntpos5": 90, 
+                      "jntpos6": 0, 
+                  } 
+              }, 
+              "speed": { 
+CodroidApi.md 2025-07-08
+40 / 41
+                  "sori": 0, 
+                  "sper": 60.0, 
+                  "stcp": 0, 
+                  "sexjl": 0, 
+                  "sexjr": 0 
+              }, 
+              "acc": { 
+                  "aori": 0, 
+                  "aper": 80.0, 
+                  "atcp": 0, 
+                  "aexjl": 0, 
+                  "aexjr": 0 
+              }, 
+              "zone": { 
+                  "type": "FINE", 
+                  "data": { 
+                    "zper": 0, 
+                    "zdis": 0, 
+                    "zvconst": 0 
+                  } 
+              } 
+            }, 
+            { 
+              "type": "movl", 
+              "target": { 
+                  "type": "cpos", 
+                  "cpos": { 
+                      "x": 89.0, 
+                      "y": 0.0, 
+                      "z": 148.3, 
+                      "a": -31.7, 
+                      "b": 181.0, 
+                      "c": 180.0, 
+                      "poscfg": { 
+                          "mode": -1, 
+                          "cf1": 0, 
+                          "cf2": 0, 
+                          "cf3": 0, 
+                          "cf4": 0, 
+                          "cf5": 0, 
+                          "cf6": 0, 
+                          "cf7": 0 
+                      } 
+                  } 
+              }, 
+              "speed": { 
+                  "sori": 0, 
+                  "sper": 60.0, 
+                  "stcp": 0, 
+                  "sexjl": 0, 
+                  "sexjr": 0 
+              }, 
+              "acc": { 
+                  "aori": 0, 
+CodroidApi.md 2025-07-08
+41 / 41
+                  "aper": 80.0, 
+                  "atcp": 0, 
+                  "aexjl": 0, 
+                  "aexjr": 0 
+              }, 
+              "zone": { 
+                  "type": "FINE", 
+                  "data": { 
+                      "zper": 0, 
+                      "zdis": 0, 
+                      "zvconst": 0 
+                  } 
+                } 
+            } 
+        ] 
+    } 
+} 
+Data Return
+// json Example 
+{ 
+    "id": 1, 
+    "type": "common", 
+    "action": "movMulti", 
+    "time": 0, 
+    "code": 200, 
+    "msg": "", 
+    "data": { 
+        "msg": "", 
+        "code": 0 
+    }, 
+    "timestamp": 1751862514562 
+} 
