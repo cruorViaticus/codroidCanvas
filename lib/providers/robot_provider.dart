@@ -36,6 +36,25 @@ class RobotProvider with ChangeNotifier {
   /// Predvolená rýchlosť (mm/s).
   static const double defaultLinearSpeed = 250.0;
 
+  /// Predvolený zdvih pera medzi ťahmi (mm).
+  ///
+  /// Každý milimeter navyše znamená dlhší Z pohyb pri každom ťahu, preto
+  /// stačí 3 mm – pero sa len odlepí od papiera.
+  static const double defaultPenUpHeightMm = 3.0;
+
+  /// Najmenší / najväčší povolený zdvih pera (mm).
+  static const double minPenUpHeightMm = 1.0;
+  static const double maxPenUpHeightMm = 50.0;
+
+  /// Predvolený polomer zaoblenia (blending) dráhy v mm.
+  static const double defaultBlendDistanceMm = 5.0;
+
+  /// Najväčší povolený polomer zaoblenia (mm).
+  static const double maxBlendDistanceMm = 20.0;
+
+  /// Tolerancia, v ktorej už controller považujeme za "na cieli" (mm).
+  static const double arrivalToleranceMm = 0.5;
+
   double _linearSpeed = defaultLinearSpeed;
 
   /// TCP rýchlosť v mm/s (automaticky orezaná na [minLinearSpeed]..[maxLinearSpeed]).
@@ -43,8 +62,26 @@ class RobotProvider with ChangeNotifier {
 
   set linearSpeed(double value) => _linearSpeed = _clampSpeed(value);
 
+  double _penUpNominalZ = defaultPenUpHeightMm;
+
   /// Nominálna (mechanická) výška pera vo vzduchu bez korekcie papiera (mm).
-  double penUpNominalZ = 15.0;
+  ///
+  /// Predvolene 3 mm; orezaná na [minPenUpHeightMm]..[maxPenUpHeightMm].
+  double get penUpNominalZ => _penUpNominalZ;
+
+  set penUpNominalZ(double value) => _penUpNominalZ =
+      value.clamp(minPenUpHeightMm, maxPenUpHeightMm).toDouble();
+
+  double _blendDistanceMm = defaultBlendDistanceMm;
+
+  /// Polomer zaoblenia (blending) pre plynulý prejazd bodov dráhy (mm).
+  ///
+  /// Robot sa vďaka nemu nezastavuje v každom bode – `zone.type = RELATIVE`
+  /// so `zdis` = táto hodnota. 0 = ostré rohy (FINE správanie).
+  double get blendDistanceMm => _blendDistanceMm;
+
+  set blendDistanceMm(double value) =>
+      _blendDistanceMm = value.clamp(0.0, maxBlendDistanceMm).toDouble();
 
   /// Nominálna výška pera v kontakte s papierom bez korekcie (mm).
   double penDownNominalZ = 0.0;
@@ -102,9 +139,46 @@ class RobotProvider with ChangeNotifier {
   /// Robot sa hýbe, alebo ešte len dobieha naplánovanú trajektóriu.
   ///
   /// `getCurCPos` v API nevracia príznak pohybu, takže okrem zmeny súradníc
-  /// držíme aj "watchdog" – čas, dokedy má pohyb podľa odhadu trvať.
-  bool get isRobotBusy =>
-      _status.isMoving || DateTime.now().isBefore(_motionDeadline);
+  /// držíme aj "watchdog" – čas, dokedy má pohyb podľa odhadu trvať. Akonáhle
+  /// však telemetria potvrdí, že TCP je na cieľovej pozícii a stojí, pohyb
+  /// považujeme za dokončený – nemusíme čakať celý (nadhodnotený) watchdog.
+  bool get isRobotBusy {
+    if (_status.isMoving) return true;
+
+    final now = DateTime.now();
+    // Watchdog vypršal = controller už nič nehlási, pohyb je mimo hry.
+    if (!now.isBefore(_motionDeadline)) return false;
+
+    // Po odoslaní balíka musí najprv ubehnúť ochranná doba – inak by sme si
+    // "robot ešte nezačal" pomýlili s "robot už skončil" (cieľ by mohol byť
+    // blízko aktuálnej pozície) a poslali by sme druhý pohyb do pohybu.
+    if (now.difference(_motionSentAt).inMilliseconds < motionStartGuardMs) {
+      return true;
+    }
+
+    return !_arrivedAtTarget;
+  }
+
+  /// Najkratší čas po odoslaní balíka, počas ktorého sa nedá ukončiť čakanie
+  /// na pokoj (robot vtedy ešte len zrýchľuje z pokoja).
+  static const int motionStartGuardMs = 400;
+
+  /// Cieľová pozícia posledného odoslaného pohybového balíka (`null` = žiadny).
+  CartesianPosition? _motionTarget;
+
+  /// Kedy bol posledný pohybový balík odoslaný.
+  DateTime _motionSentAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// TCP už je v tolerancii [arrivalToleranceMm] od cieľa posledného balíka.
+  bool get _arrivedAtTarget {
+    final target = _motionTarget;
+    if (target == null || !_status.isConnected) return false;
+
+    final current = _status.cartPosition;
+    return (current.x - target.x).abs() <= arrivalToleranceMm &&
+        (current.y - target.y).abs() <= arrivalToleranceMm &&
+        (current.z - target.z).abs() <= arrivalToleranceMm;
+  }
 
   RobotProvider() {
     _initialized = _loadPreferences();
@@ -123,6 +197,9 @@ class RobotProvider with ChangeNotifier {
     _zOffsetMm = (prefs.getDouble('z_offset_mm') ?? 0.0)
         .clamp(-maxZOffsetMm, maxZOffsetMm)
         .toDouble();
+    penUpNominalZ = prefs.getDouble('pen_up_mm') ?? defaultPenUpHeightMm;
+    blendDistanceMm =
+        prefs.getDouble('blend_mm') ?? defaultBlendDistanceMm;
     notifyListeners();
   }
 
@@ -152,6 +229,26 @@ class RobotProvider with ChangeNotifier {
     debugPrint(
         "💾 [SETTINGS] Z korekcia uložená: ${zOffsetMm.toStringAsFixed(1)} mm "
         "(pero hore: ${penUpZ.toStringAsFixed(1)} / dole: ${penDownZ.toStringAsFixed(1)})");
+  }
+
+  /// Uloží zdvih pera medzi ťahmi (orezaný na 1 – 50 mm) do SharedPreferences.
+  Future<void> setPenUpHeight(double value) async {
+    penUpNominalZ = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble('pen_up_mm', penUpNominalZ);
+    notifyListeners();
+    debugPrint("💾 [SETTINGS] Zdvih pera uložený: "
+        "${penUpNominalZ.toStringAsFixed(1)} mm");
+  }
+
+  /// Uloží polomer zaoblenia dráhy (0 – 20 mm) do SharedPreferences.
+  Future<void> setBlendDistance(double value) async {
+    blendDistanceMm = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble('blend_mm', blendDistanceMm);
+    notifyListeners();
+    debugPrint("💾 [SETTINGS] Blending uložený: "
+        "${blendDistanceMm.toStringAsFixed(1)} mm");
   }
 
   // --- SPOJENIE A SIEŤOVÝ PING ---
@@ -216,6 +313,8 @@ class RobotProvider with ChangeNotifier {
     _channel = null;
     _status = RobotStatus();
     _motionRejected = false;
+    _motionTarget = null;
+    _motionSentAt = DateTime.fromMillisecondsSinceEpoch(0);
     _motionDeadline = DateTime.fromMillisecondsSinceEpoch(0);
     _lastControllerError = '';
     notifyListeners();
@@ -241,6 +340,7 @@ class RobotProvider with ChangeNotifier {
       // fronta sa nesmie ďalej sypať do robota.
       if (action == 'mov' || action == 'movMulti') {
         _motionRejected = true;
+        _motionTarget = null;
         _motionDeadline = DateTime.fromMillisecondsSinceEpoch(0);
       }
       notifyListeners();
@@ -263,7 +363,7 @@ class RobotProvider with ChangeNotifier {
   /// sa nezastavil do [timeout].
   Future<bool> waitUntilIdle({
     Duration timeout = const Duration(seconds: 30),
-    int stableSamples = 3,
+    int stableSamples = 2,
   }) async {
     if (_channel == null || !_status.isConnected) return false;
 
@@ -282,7 +382,12 @@ class RobotProvider with ChangeNotifier {
         stable = 0;
       } else {
         stable++;
-        if (stable >= stableSamples) return true;
+        if (stable >= stableSamples) {
+          // Pohyb je dokončený – cieľ už netreba strážiť.
+          _motionTarget = null;
+          _motionDeadline = DateTime.fromMillisecondsSinceEpoch(0);
+          return true;
+        }
       }
 
       await Future<void>.delayed(const Duration(milliseconds: 100));
@@ -306,7 +411,9 @@ class RobotProvider with ChangeNotifier {
     if (_channel == null || !_status.isConnected) return false;
 
     _motionRejected = false;
-    _motionDeadline = DateTime.now().add(
+    _motionTarget = _targetOf(payload);
+    _motionSentAt = DateTime.now();
+    _motionDeadline = _motionSentAt.add(
       Duration(milliseconds: estimatedDurationMs.clamp(100, 120000)),
     );
     _sendJson(payload);
@@ -314,10 +421,33 @@ class RobotProvider with ChangeNotifier {
     return true;
   }
 
+  /// Cieľová pozícia (`cpos`) posledného bodu pohybového balíka.
+  static CartesianPosition? _targetOf(Map<String, dynamic> payload) {
+    try {
+      final data = payload['data'];
+      final points = data is Map ? data['points'] : null;
+      if (points is! List || points.isEmpty) return null;
+
+      final last = points.last;
+      final target = last is Map ? last['target'] : null;
+      final cpos = target is Map ? target['cpos'] : null;
+      if (cpos is! Map) return null;
+
+      return CartesianPosition(
+        x: (cpos['x'] as num?)?.toDouble() ?? 0.0,
+        y: (cpos['y'] as num?)?.toDouble() ?? 0.0,
+        z: (cpos['z'] as num?)?.toDouble() ?? 0.0,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Zruší chybový stav a pošle controlleru `ClearError` (100).
   Future<void> clearRobotError() async {
     _lastControllerError = '';
     _motionRejected = false;
+    _motionTarget = null;
     _motionDeadline = DateTime.fromMillisecondsSinceEpoch(0);
     notifyListeners();
     await sendControlCommand(100, 'ClearError');
@@ -409,6 +539,8 @@ class RobotProvider with ChangeNotifier {
 
   void stopMovement() {
     _motionQueue.clear();
+    _motionTarget = null;
+    _motionSentAt = DateTime.fromMillisecondsSinceEpoch(0);
     _motionDeadline = DateTime.fromMillisecondsSinceEpoch(0);
     _motionRejected = false;
     stopTcpJog();
@@ -516,7 +648,7 @@ class RobotProvider with ChangeNotifier {
 
   /// Tvorba bodu pre Codroid controller
   Map<String, dynamic> _buildCartPoint(double x, double y, double z,
-      {required String zoneType, double zdis = 4.0}) {
+      {required String zoneType, double? zdis}) {
     return {
       "type": "movl",
       "target": {
@@ -561,7 +693,11 @@ class RobotProvider with ChangeNotifier {
             }
           : {
               "type": "RELATIVE",
-              "data": {"zper": 50, "zdis": zdis, "zvconst": 50}
+              "data": {
+                "zper": 50,
+                "zdis": zdis ?? blendDistanceMm,
+                "zvconst": 50
+              }
             }
     };
   }

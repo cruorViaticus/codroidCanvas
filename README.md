@@ -12,6 +12,16 @@ Flutter app that turns a Codroid S arm into a pen plotter (S Pen canvas →
   **±30 mm** (paper / table is higher or lower). Pen up = `penUpNominalZ + offset`,
   pen down = `penDownNominalZ + offset`. Persisted as `z_offset_mm`.
   Use *Test Pen UP / DOWN* to verify the contact height while the robot is idle.
+* **Pen Lift & Blending (speed)** – the two parameters that decide how fast the
+  arm plots:
+  * **Pen lift** between strokes, default **3 mm** (range 1 – 50 mm, persisted as
+    `pen_up_mm`). Every extra millimetre is a longer Z move per stroke, so 3 mm
+    is enough to just leave the paper.
+  * **Corner blending radius** (`zone.type = RELATIVE`, `zdis`), default **5 mm**
+    (range 0 – 20 mm, persisted as `blend_mm`). With blending the controller
+    flows through each path point instead of stopping at it; `0` = exact
+    corners (slowest). Only the pen-down contact point and the last point of
+    each packet stay `FINE` (exact stop).
 
 Settings are stored in `SharedPreferences` and applied to every generated
 `movl` / `movMulti` point.
@@ -45,7 +55,16 @@ flutter test tool/generate_app_icons.dart
 ## Motion safety
 
 * Strokes are split into packets of **≤ 30 points** (`movMulti` limit).
+* Strokes waiting in the FIFO queue are **chained into one continuous path**:
+  the arm lifts the pen only 3 mm and keeps moving, so it does not stop between
+  strokes.
+* All path points inside a packet use `zone.type = RELATIVE` (**blending**), so
+  the controller does not brake at every point. `FINE` is used only for the
+  pen-down contact point and for the last point of each packet.
 * Each packet is sent only after the robot reports idle (`waitUntilIdle`).
+  The wait ends as soon as telemetry shows the TCP on the last commanded target
+  (0.5 mm) and not moving – the conservative duration watchdog is only a
+  fallback, so no time is wasted after the move is finished.
 * Controller errors (`data.code != 0`) are shown in the canvas error banner.
 
 ## Tests

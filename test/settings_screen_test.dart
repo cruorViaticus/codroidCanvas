@@ -50,13 +50,15 @@ void main() {
     return provider;
   }
 
-  testWidgets('SettingsScreen zobrazí rýchlosť aj Z korekciu', (tester) async {
+  testWidgets('SettingsScreen zobrazí rýchlosť, Z korekciu aj blending',
+      (tester) async {
     final provider = await pumpSettings(tester);
 
     expect(find.text('Drawing Speed (TCP)'), findsOneWidget);
     expect(find.text('Paper Height / Z Offset'), findsOneWidget);
-    // dva slidery: rýchlosť + Z korekcia
-    expect(find.byType(Slider), findsNWidgets(2));
+    expect(find.text('Pen Lift & Blending (speed)'), findsOneWidget);
+    // štyri slidery: rýchlosť + Z korekcia + zdvih pera + blending
+    expect(find.byType(Slider), findsNWidgets(4));
     // náhľad výsledných Z výšok bez korekcie
     expect(
       find.textContaining('Pen up Z: ${provider.penUpNominalZ.toStringAsFixed(1)}'),
@@ -66,6 +68,9 @@ void main() {
       find.textContaining('Pen down Z: ${provider.penDownNominalZ.toStringAsFixed(1)}'),
       findsOneWidget,
     );
+    // zdvih pera je predvolene 3 mm
+    expect(provider.penUpNominalZ, RobotProvider.defaultPenUpHeightMm);
+    expect(provider.penUpNominalZ, 3.0);
   });
 
   testWidgets('rýchlosť nad 500 mm/s neprejde validáciou', (tester) async {
@@ -84,7 +89,7 @@ void main() {
     expect(find.text('Save Parameters'), findsOneWidget);
   });
 
-  testWidgets('uloženie prenesie rýchlosť a Z korekciu do providera',
+  testWidgets('uloženie prenesie rýchlosť, Z korekciu aj zdvih/blending',
       (tester) async {
     final provider = await pumpSettings(tester);
 
@@ -92,7 +97,7 @@ void main() {
     await tester.tap(find.widgetWithText(OutlinedButton, '+10.0 mm'));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('Pen up Z: 25.0'), findsOneWidget);
+    expect(find.textContaining('Pen up Z: 13.0'), findsOneWidget);
 
     await tester.enterText(
       find.widgetWithText(TextFormField, 'Linear TCP Speed'),
@@ -105,6 +110,8 @@ void main() {
     expect(provider.zOffsetMm, 10.0);
     expect(provider.penUpZ, closeTo(provider.penUpNominalZ + 10.0, 0.001));
     expect(provider.penDownZ, closeTo(provider.penDownNominalZ + 10.0, 0.001));
+    expect(provider.penUpNominalZ, RobotProvider.defaultPenUpHeightMm);
+    expect(provider.blendDistanceMm, RobotProvider.defaultBlendDistanceMm);
 
     // po uložení sa obrazovka zavrie
     expect(find.text('open settings'), findsOneWidget);

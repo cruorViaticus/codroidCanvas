@@ -8,11 +8,13 @@ import '../providers/robot_provider.dart';
 
 /// Prekladá ťahy z canvasu na balíky `movMulti` pre Codroid controller.
 ///
-/// Dve pravidlá z API dokumentácie, ktoré musia byť dodržané, inak robot
+/// Tri pravidlá z API dokumentácie, ktoré musia byť dodržané, inak robot
 /// spadne do alarmu:
 ///  1. `movMulti` / MovLSegments prijme **maximálne 30 pozícií** v balíku.
 ///  2. Nový pohybový príkaz sa posiela až keď controller hlási pokoj –
 ///     dva súbežné pohyby = konflikt trajektórie a alarm.
+///  3. Body vnútri balíka idú so `zone.type = RELATIVE` (blending), takže
+///     robot nebrzdí v každom bode a kreslí plynule.
 class StrokeMotionProcessor {
   /// API: "continous line motion (30 positions maximum)".
   static const int maxPointsPerPacket = 30;
@@ -24,20 +26,46 @@ class StrokeMotionProcessor {
 
   StrokeMotionProcessor(this.provider);
 
-  /// Spracuje celú FIFO frontu ťahov – jeden ťah = jeden alebo viac balíkov.
+  /// Polomer zaoblenia (blending) pre plynulý prejazd bodov v mm.
+  ///
+  /// Hodnota > 0 zapne `zone.type = RELATIVE` so `zdis` – robot prejde bod
+  /// bez zastavenia (0 = presné FINE rohy, najpomalšie).
+  double get blendMm => provider.blendDistanceMm;
+
+  /// Spracuje celú FIFO frontu ťahov.
+  ///
+  /// Ťahy, ktoré už čakajú vo fronte, sa spájajú do jednej spojitej dráhy –
+  /// robot medzi nimi nezastavuje, iba zdvihne pero o [RobotProvider.penUpZ].
   Future<void> processQueue(List<List<StrokePoint>> queue) async {
     if (!provider.status.isConnected) return;
 
     while (queue.isNotEmpty) {
       if (!provider.status.isConnected) return;
 
-      final stroke = queue.first;
-      final success = await plotStroke(stroke);
+      // Do jedného balíka (max 30 bodov) naberieme viac ťahov za sebou.
+      final batch = <List<StrokePoint>>[];
+      int plannedPoints = 0;
 
-      if (queue.isNotEmpty && identical(queue.first, stroke)) {
-        queue.removeAt(0);
+      while (queue.isNotEmpty && plannedPoints < maxPointsPerPacket) {
+        final stroke = queue.first;
+        final path = toMillimetrePath(stroke);
+
+        if (queue.isNotEmpty && identical(queue.first, stroke)) {
+          queue.removeAt(0);
+        }
+        if (path.length < 2) {
+          debugPrint("⏭️ Príliš krátky ťah preskočený (${path.length} body).");
+          continue;
+        }
+
+        batch.add(stroke);
+        // kreslenie + zdvih + prejazd + klesnutie
+        plannedPoints += path.length + 3;
       }
 
+      if (batch.isEmpty) continue;
+
+      final success = await plotStrokes(batch);
       if (!success) {
         queue.clear();
         debugPrint(
@@ -48,62 +76,61 @@ class StrokeMotionProcessor {
   }
 
   /// Vykreslí jeden ťah.
+  Future<bool> plotStroke(List<StrokePoint> stroke) => plotStrokes([stroke]);
+
+  /// Vykreslí zadané ťahy ako **jednu spojitú dráhu**.
   ///
-  /// Ťah sa rozdelí na balíky s max. [maxPointsPerPacket] bodmi. Každý balík
-  /// sa odošle až po potvrdenom zastavení robota a pred odoslaním ďalšieho
-  /// sa opäť čaká na pokoj – tým sa nikdy neprekryjú dve trajektórie.
-  Future<bool> plotStroke(List<StrokePoint> stroke) async {
-    final path = toMillimetrePath(stroke);
-    if (path.length < 2) return true;
+  /// Medzi ťahmi pero len zdvihne na [RobotProvider.penUpZ] a hneď pokračuje
+  /// prejazdom na začiatok ďalšieho ťahu. Body dráhy sa zaobliavajú
+  /// (`zone.type = RELATIVE`, `zdis = blendMm`), takže robot nezastavuje
+  /// v každom bode. FINE (presné zastavenie) ostáva len tam, kde pero
+  /// dopadá na papier a na konci každého balíka.
+  Future<bool> plotStrokes(List<List<StrokePoint>> strokes) async {
+    final points = <Map<String, dynamic>>[];
+    bool firstStroke = true;
 
-    int index = 0;
-    bool firstPacket = true;
+    for (final stroke in strokes) {
+      final path = toMillimetrePath(stroke);
+      if (path.length < 2) continue;
 
-    while (index < path.length) {
-      final packet = <Map<String, dynamic>>[];
-
-      if (firstPacket) {
+      if (firstStroke) {
         // Pero musí byť vo vzduchu, až potom klesneme na štart.
-        packet.addAll(_approachPoints(path.first));
-        packet.add(buildCartPoint(
-          path.first.dx,
-          path.first.dy,
-          provider.penDownZ,
-          zoneType: "FINE",
-        ));
-        index = 1;
-        firstPacket = false;
+        points.addAll(_approachPoints(path.first));
+        firstStroke = false;
+      } else {
+        // Pero visí nad koncom predchádzajúceho ťahu – stačí prejazd.
+        points.add(_blendPoint(path.first, provider.penUpZ));
       }
 
-      // Stredné body balíka – posledný bod musí mať FINE (presné zastavenie)
-      while (index < path.length) {
-        final bool isStrokeEnd = index == path.length - 1;
-        final int reserve = isStrokeEnd ? 1 : 0; // miesto pre zdvih pera
-        if (packet.length + 1 + reserve > maxPointsPerPacket) break;
+      // Klesnutie na papier – presný dotyk, aby čiara začínala presne.
+      points.add(buildCartPoint(
+        path.first.dx,
+        path.first.dy,
+        provider.penDownZ,
+        zoneType: "FINE",
+      ));
 
-        final point = path[index];
-        packet.add(buildCartPoint(
-          point.dx,
-          point.dy,
-          provider.penDownZ,
-          zoneType: "RELATIVE",
-          zdis: 4.0,
-        ));
-        index++;
+      // Kreslenie – všetky body sa zaoblia (blending = žiadne brzdenie).
+      for (int i = 1; i < path.length; i++) {
+        points.add(_blendPoint(path[i], provider.penDownZ));
       }
 
+      // Zdvih pera na konci ťahu – plynulo do prejazdu na ďalší ťah.
+      points.add(_blendPoint(path.last, provider.penUpZ));
+    }
+
+    if (points.isEmpty) return true;
+
+    // Posledný bod celej dráhy musí presne zastaviť.
+    points[points.length - 1] = _withFineZone(points.last);
+
+    // Rozdelenie na balíky po [maxPointsPerPacket] bodoch.
+    for (int start = 0; start < points.length; start += maxPointsPerPacket) {
+      final end = math.min(start + maxPointsPerPacket, points.length);
+      final packet = points.sublist(start, end);
+
+      // Koniec balíka = presná pozícia (controller medzi balíkmi zastaví).
       packet[packet.length - 1] = _withFineZone(packet.last);
-
-      if (index >= path.length) {
-        // Koniec ťahu – zdvih pera na poslednej pozícii.
-        final end = path.last;
-        packet.add(buildCartPoint(
-          end.dx,
-          end.dy,
-          provider.penUpZ,
-          zoneType: "FINE",
-        ));
-      }
 
       final sent = await sendPacket(packet);
       if (!sent) return false;
@@ -154,6 +181,10 @@ class StrokeMotionProcessor {
   }
 
   /// Odhad trvania balíka v ms (rýchlosť robota + rezerva na akceleráciu).
+  ///
+  /// Slúži len ako watchdog – `waitUntilIdle` skončí skôr, akonáhle telemetria
+  /// potvrdí, že TCP je na cieľovej pozícii. Preto môže byť odhad mierne
+  /// nadhodnotený (blending znamená, že robot ide takmer plnou rýchlosťou).
   int estimatePacketDurationMs(List<Map<String, dynamic>> points) {
     double distanceMm = 0.0;
     for (int i = 0; i < points.length - 1; i++) {
@@ -166,8 +197,9 @@ class StrokeMotionProcessor {
     }
 
     final speed = provider.linearSpeed <= 0 ? 250.0 : provider.linearSpeed;
-    // Controller spomaľuje pred každým FINE bodom – počítame s 60 % rýchlosti.
-    return ((distanceMm / (speed * 0.6)) * 1000).toInt() + 700;
+    // Zaoblené rohy (blending) = takmer plná rýchlosť; 500 ms rezerva na
+    // akceleráciu a dorovnanie na presný koncový bod.
+    return ((distanceMm / (speed * 0.8)) * 1000).toInt() + 500;
   }
 
   /// Prevod normalizovaných bodov canvasu na milimetre robota
@@ -229,9 +261,18 @@ class StrokeMotionProcessor {
         }
       };
 
+  /// Bod dráhy so zaoblením (blending) – robot ním prejde bez zastavenia.
+  Map<String, dynamic> _blendPoint(Offset point, double z) => buildCartPoint(
+        point.dx,
+        point.dy,
+        z,
+        zoneType: "RELATIVE",
+        zdis: blendMm,
+      );
+
   /// Tvorba bodu pre Codroid controller
   Map<String, dynamic> buildCartPoint(double x, double y, double z,
-      {required String zoneType, double zdis = 4.0}) {
+      {required String zoneType, double? zdis}) {
     return {
       "type": "movl",
       "target": {
@@ -272,7 +313,7 @@ class StrokeMotionProcessor {
               "type": "RELATIVE",
               "data": {
                 "zper": 50,
-                "zdis": zdis,
+                "zdis": zdis ?? blendMm,
                 "zvconst": 50
               }
             }

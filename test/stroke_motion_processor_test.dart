@@ -41,6 +41,10 @@ Map<String, dynamic> _cpos(Map<String, dynamic> point) =>
 String _zoneType(Map<String, dynamic> point) =>
     (point['zone'] as Map)['type'] as String;
 
+/// Polomer zaoblenia (`zdis`) zo zóny bodu – pre RELATIVE body dráhy.
+double _zoneZdis(Map<String, dynamic> point) =>
+    (((point['zone'] as Map)['data'] as Map)['zdis'] as num).toDouble();
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -155,6 +159,99 @@ void main() {
       expect(processor.packets.single.length, 5);
     });
 
+    test('pero sa dvíha len 3 mm a kresliace body majú blending', () async {
+      final provider = RobotProvider();
+      await provider.initialized;
+      final processor = _CapturingProcessor(provider);
+
+      expect(RobotProvider.defaultPenUpHeightMm, 3.0);
+      expect(provider.penUpZ, 3.0);
+
+      final stroke = [
+        StrokePoint(x: 0.10, y: 0.10, pressure: 1.0),
+        StrokePoint(x: 0.20, y: 0.10, pressure: 1.0),
+        StrokePoint(x: 0.20, y: 0.20, pressure: 1.0),
+      ];
+
+      await processor.plotStroke(stroke);
+
+      final packet = processor.packets.single;
+
+      // zdvih medzi ťahmi = len 3 mm nad papierom
+      expect(_cpos(packet.last)['z'], 3.0);
+      expect(_cpos(packet.first)['z'], 3.0);
+
+      // klesnutie na papier je presné (FINE), kreslenie je zaoblené (RELATIVE)
+      expect(_zoneType(packet[1]), 'FINE');
+      final drawing = packet.sublist(2, packet.length - 1);
+      expect(drawing, isNotEmpty);
+      for (final point in drawing) {
+        expect(_zoneType(point), 'RELATIVE');
+        expect(_zoneZdis(point), provider.blendDistanceMm);
+        expect(_zoneZdis(point), greaterThan(0.0));
+      }
+      // zdvih na konci ťahu je zaoblený → robot nebrzdí na konci čiary
+      expect(_zoneType(packet.last), 'FINE'); // posledný bod balíka = presné
+      expect(_cpos(packet[packet.length - 2])['z'], provider.penDownZ);
+    });
+
+    test('blending z nastavení sa prejaví v zóne bodov', () async {
+      final provider = RobotProvider();
+      await provider.initialized;
+      final processor = _CapturingProcessor(provider);
+
+      provider.blendDistanceMm = 12.0;
+
+      await processor.plotStroke([
+        StrokePoint(x: 0.10, y: 0.10, pressure: 1.0),
+        StrokePoint(x: 0.30, y: 0.10, pressure: 1.0),
+        StrokePoint(x: 0.30, y: 0.40, pressure: 1.0),
+      ]);
+
+      final packet = processor.packets.single;
+      expect(processor.blendMm, 12.0);
+      expect(_zoneZdis(packet[2]), 12.0);
+    });
+
+    test('dva krátke ťahy idú v jednom balíku bez zastavenia medzi nimi',
+        () async {
+      final provider = RobotProvider();
+      await provider.initialized;
+      final processor = _CapturingProcessor(provider);
+
+      final first = [
+        StrokePoint(x: 0.10, y: 0.10, pressure: 1.0),
+        StrokePoint(x: 0.20, y: 0.10, pressure: 1.0),
+      ];
+      final second = [
+        StrokePoint(x: 0.20, y: 0.30, pressure: 1.0),
+        StrokePoint(x: 0.30, y: 0.30, pressure: 1.0),
+      ];
+
+      final success = await processor.plotStrokes([first, second]);
+
+      expect(success, isTrue);
+      // oba ťahy = jeden balík (žiadne čakanie na pokoj medzi ťahmi)
+      expect(processor.packets.length, 1);
+
+      final packet = processor.packets.single;
+      // nájazd + klesnutie + kreslenie + zdvih = 4 body na ťah
+      expect(packet.length, 8);
+
+      // koniec 1. ťahu: pero 3 mm hore, ale pohyb pokračuje (RELATIVE)
+      expect(_cpos(packet[3])['z'], provider.penUpZ);
+      expect(_zoneType(packet[3]), 'RELATIVE');
+      // prejazd na 2. ťah – pero stále hore (žiadne klesanie na papier)
+      expect(_cpos(packet[4])['z'], provider.penUpZ);
+      expect(_zoneType(packet[4]), 'RELATIVE');
+      // až potom klesnutie na papier 2. ťahu
+      expect(_cpos(packet[5])['z'], provider.penDownZ);
+      expect(_zoneType(packet[5]), 'FINE');
+      // koniec balíka = presné zastavenie
+      expect(_zoneType(packet.last), 'FINE');
+      expect(_cpos(packet.last)['z'], provider.penUpZ);
+    });
+
     test('balík sa dá serializovať a odhad trvania je kladný', () {
       final provider = RobotProvider();
       final processor = StrokeMotionProcessor(provider);
@@ -174,7 +271,7 @@ void main() {
       expect(json, contains('movMulti'));
       expect(processor.estimatePacketDurationMs(packet), greaterThan(0));
 
-      // ~141 mm dráhy pri 250 mm/s (60 %) => cca 1 s + rezerva 700 ms
+      // ~141 mm dráhy pri 250 mm/s (80 %) => cca 0,7 s + rezerva 500 ms
       expect(
         processor.estimatePacketDurationMs(packet),
         greaterThanOrEqualTo(700),
@@ -238,13 +335,37 @@ void main() {
 
       await provider.setLinearSpeed(420.0);
       await provider.setZOffset(-8.0);
+      await provider.setPenUpHeight(4.0);
+      await provider.setBlendDistance(9.0);
 
       final prefs = await SharedPreferences.getInstance();
 
       expect(prefs.getDouble('linear_speed'), 420.0);
       expect(prefs.getDouble('z_offset_mm'), -8.0);
+      expect(prefs.getDouble('pen_up_mm'), 4.0);
+      expect(prefs.getDouble('blend_mm'), 9.0);
       expect(provider.linearSpeed, 420.0);
       expect(provider.zOffsetMm, -8.0);
+      expect(provider.penUpNominalZ, 4.0);
+      expect(provider.blendDistanceMm, 9.0);
+    });
+
+    test('zdvih pera 1 – 50 mm a blending 0 – 20 mm sú orezané', () async {
+      final provider = RobotProvider();
+      await provider.initialized;
+
+      // menej ako 1 mm by pero neodlepilo od papiera
+      provider.penUpNominalZ = 0.2;
+      expect(provider.penUpNominalZ, RobotProvider.minPenUpHeightMm);
+
+      provider.penUpNominalZ = 80.0;
+      expect(provider.penUpNominalZ, RobotProvider.maxPenUpHeightMm);
+
+      provider.blendDistanceMm = -3.0;
+      expect(provider.blendDistanceMm, 0.0);
+
+      provider.blendDistanceMm = 99.0;
+      expect(provider.blendDistanceMm, RobotProvider.maxBlendDistanceMm);
     });
 
     test('korekcia sa prejaví v balíkoch (pero hore aj dole)', () async {

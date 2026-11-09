@@ -19,6 +19,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // Lokálne (neuložené) hodnoty – slider ich drží v zhode s textovým poľom.
   double _speed = RobotProvider.defaultLinearSpeed;
   double _zOffset = 0.0;
+  double _penUp = RobotProvider.defaultPenUpHeightMm;
+  double _blend = RobotProvider.defaultBlendDistanceMm;
 
   @override
   void initState() {
@@ -27,6 +29,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _ipController = TextEditingController(text: provider.ipAddress);
     _speed = provider.linearSpeed;
     _zOffset = provider.zOffsetMm;
+    _penUp = provider.penUpNominalZ;
+    _blend = provider.blendDistanceMm;
     _speedController = TextEditingController(text: _speed.toStringAsFixed(0));
     _offsetController = TextEditingController(text: _formatOffset(_zOffset));
   }
@@ -101,6 +105,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await provider.setIpAddress(_ipController.text.trim());
     await provider.setLinearSpeed(speed);
     await provider.setZOffset(offset);
+    await provider.setPenUpHeight(_penUp);
+    await provider.setBlendDistance(_blend);
 
     messenger.showSnackBar(
       SnackBar(
@@ -108,7 +114,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
           'Saved • Speed ${provider.linearSpeed.toStringAsFixed(0)} mm/s • '
           'Z offset ${_formatOffset(provider.zOffsetMm)} mm '
           '(pen up ${provider.penUpZ.toStringAsFixed(1)} / '
-          'down ${provider.penDownZ.toStringAsFixed(1)})',
+          'down ${provider.penDownZ.toStringAsFixed(1)}) • '
+          'lift ${provider.penUpNominalZ.toStringAsFixed(1)} mm • '
+          'blend ${provider.blendDistanceMm.toStringAsFixed(1)} mm',
         ),
       ),
     );
@@ -142,8 +150,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final provider = Provider.of<RobotProvider>(context);
     final bool canTest = provider.status.isConnected;
 
-    final double effectiveUpZ = provider.penUpNominalZ + _zOffset;
+    final double effectiveUpZ = _penUp + _zOffset;
     final double effectiveDownZ = provider.penDownNominalZ + _zOffset;
+
+    // Praktický rozsah slidera (uložiť sa dá aj viac, ale 20 mm je dosť).
+    const double maxLiftSlider = 20.0;
 
     return Scaffold(
       appBar: AppBar(
@@ -350,6 +361,93 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             ? 'Tip: jog the pen near the paper, then use '
                                 'Test Pen DOWN and adjust the offset by ±1 mm.'
                             : 'Connect the robot to enable the pen height test.',
+                        style: TextStyle(
+                            fontSize: 11, color: Colors.grey.shade600),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+
+              // ---------- PEN LIFT & BLENDING ----------
+              Card(
+                elevation: 2,
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Pen Lift & Blending (speed)',
+                          style: TextStyle(fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Lower lift + blending = much faster plotting: the arm '
+                        'no longer stops at every point or raises the pen high '
+                        'between strokes.',
+                        style: TextStyle(
+                            fontSize: 12, color: Colors.grey.shade700),
+                      ),
+                      const SizedBox(height: 12),
+
+                      // --- Pen lift ---
+                      Row(
+                        children: [
+                          const Icon(Icons.vertical_align_top,
+                              color: Colors.indigo),
+                          Expanded(
+                            child: Slider(
+                              value: _penUp.clamp(
+                                  RobotProvider.minPenUpHeightMm, maxLiftSlider),
+                              min: RobotProvider.minPenUpHeightMm,
+                              max: maxLiftSlider,
+                              divisions: 19, // kroky po 1 mm
+                              label: '${_penUp.toStringAsFixed(1)} mm',
+                              onChanged: (value) =>
+                                  setState(() => _penUp = value),
+                            ),
+                          ),
+                        ],
+                      ),
+                      Text(
+                        'Pen lift between strokes: '
+                        '${_penUp.toStringAsFixed(1)} mm '
+                        '(recommended 3 mm – pen only leaves the paper)',
+                        style: const TextStyle(fontWeight: FontWeight.w500),
+                      ),
+                      const SizedBox(height: 12),
+
+                      // --- Blending ---
+                      Row(
+                        children: [
+                          const Icon(Icons.gesture, color: Colors.indigo),
+                          Expanded(
+                            child: Slider(
+                              value: _blend.clamp(
+                                  0.0, RobotProvider.maxBlendDistanceMm),
+                              min: 0.0,
+                              max: RobotProvider.maxBlendDistanceMm,
+                              divisions: 20, // kroky po 1 mm
+                              label: '${_blend.toStringAsFixed(0)} mm',
+                              onChanged: (value) =>
+                                  setState(() => _blend = value),
+                            ),
+                          ),
+                        ],
+                      ),
+                      Text(
+                        'Corner blending radius: '
+                        '${_blend.toStringAsFixed(1)} mm '
+                        '(0 = exact corners / slowest, '
+                        '${RobotProvider.maxBlendDistanceMm.toStringAsFixed(0)}'
+                        ' mm = smoothest)',
+                        style: const TextStyle(fontWeight: FontWeight.w500),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Blending is sent as zone RELATIVE (zdis) on every '
+                        'path point; only the pen-down contact point and the '
+                        'end of each packet stay FINE.',
                         style: TextStyle(
                             fontSize: 11, color: Colors.grey.shade600),
                       ),
