@@ -5,6 +5,9 @@ import 'stroke_point.dart';
 /// Okrem samotných bodov si nesie aj vlastnú hustotu bodov: voľná kresba
 /// z S Pen canvasu chce hrubé filtrovanie (rýchlosť), kým text a obrázok
 /// potrebujú jemné rozlíšenie, inak sa detaily stratia.
+///
+/// [penLiftMm] je výška zdvihu pera medzi ťahmi pre tento konkrétny ťah –
+/// bodkový pattern potrebuje iný zdvih ako súvislé riadky.
 class QueuedStroke {
   /// Body ťahu v normalizovaných súradniciach canvasu (0..1).
   final List<StrokePoint> points;
@@ -15,9 +18,14 @@ class QueuedStroke {
   /// (5 mm – rovnaká ako doteraz pre voľnú kresbu).
   final double? minPointSpacingMm;
 
-  const QueuedStroke(this.points, {this.minPointSpacingMm});
+  /// Výška zdvihu pera medzi ťahmi v mm (meraná od papiera).
+  ///
+  /// `null` = predvolený zdvih z nastavení (`RobotProvider.penUpNominalZ`).
+  final double? penLiftMm;
+
+  const QueuedStroke(this.points, {this.minPointSpacingMm, this.penLiftMm});
 
   @override
-  String toString() =>
-      'QueuedStroke(${points.length} bodov, spacing: $minPointSpacingMm mm)';
+  String toString() => 'QueuedStroke(${points.length} bodov, '
+      'spacing: $minPointSpacingMm mm, lift: $penLiftMm mm)';
 }

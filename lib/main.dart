@@ -16,7 +16,6 @@ class CodroidPlotterApp extends StatelessWidget {
   const CodroidPlotterApp({super.key});
 
   @override
-
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Codroid S Pen Plotter',

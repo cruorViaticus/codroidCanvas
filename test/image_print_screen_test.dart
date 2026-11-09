@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:codroid_pen_plotter/models/plot_pattern.dart';
 import 'package:codroid_pen_plotter/providers/robot_provider.dart';
 import 'package:codroid_pen_plotter/screens/image_print_screen.dart';
 import 'package:codroid_pen_plotter/widgets/plot_preview.dart';
@@ -41,6 +42,8 @@ void main() {
 
     expect(find.text('Pick Image'), findsOneWidget);
     expect(find.text('PNG / JPG / BMP / GIF / WebP'), findsOneWidget);
+    expect(find.text('Plot pattern'), findsOneWidget);
+    expect(find.text('Pen lift between lines / dots'), findsOneWidget);
     expect(find.text('Line density'), findsOneWidget);
     expect(find.text('Point spacing'), findsOneWidget);
     expect(find.text('Threshold'), findsOneWidget);
@@ -54,6 +57,33 @@ void main() {
     // bez obrázka nie je čo kresliť
     final preview = tester.widget<PlotPreview>(find.byType(PlotPreview));
     expect(preview.strokes, isEmpty);
+
+    // `auto` je predvolený pattern a všetkých šesť volieb je na obrazovke
+    for (final pattern in PlotPattern.values) {
+      expect(find.widgetWithText(ChoiceChip, pattern.label), findsOneWidget);
+    }
+  });
+
+  testWidgets('ImagePrintScreen – výber patternu a zdvihu pera',
+      (tester) async {
+    await pumpImagePrint(tester);
+
+    await tester.tap(find.widgetWithText(ChoiceChip, 'Diagonal'));
+    await tester.pumpAndSettle();
+
+    final diagonal = tester.widget<ChoiceChip>(
+      find.widgetWithText(ChoiceChip, 'Diagonal'),
+    );
+    expect(diagonal.selected, isTrue);
+    // popis zvoleného patternu sa zobrazí pod chipmi
+    expect(find.text(PlotPattern.diagonal.description), findsOneWidget);
+
+    // zdvih pera má vlastný slider (predvolene z nastavení = 3 mm)
+    final liftSliders = tester
+        .widgetList<Slider>(find.byType(Slider))
+        .where((slider) => slider.min == RobotProvider.minPenUpHeightMm);
+    expect(liftSliders, isNotEmpty);
+    expect(liftSliders.first.value, RobotProvider.defaultPenUpHeightMm);
   });
 
   testWidgets('ImagePrintScreen bez obrázka neodošle nič do fronty',

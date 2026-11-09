@@ -64,7 +64,8 @@ class RobotStatus {
 
   factory RobotStatus.fromCartJson(
     Map<String, dynamic> json, {
-    RobotStatus? previousStatus, // 👈 Voliteľný predchádzajúci stav pre výpočet delty
+    RobotStatus?
+        previousStatus, // 👈 Voliteľný predchádzajúci stav pre výpočet delty
   }) {
     debugPrint("📊 [getCurCPos TELEMETRY]: $json");
 

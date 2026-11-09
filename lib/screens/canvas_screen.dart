@@ -4,6 +4,7 @@ import '../models/paper_format.dart';
 import '../models/stroke_point.dart';
 import '../providers/robot_provider.dart';
 import '../widgets/app_logo.dart';
+import '../widgets/plot_progress_bar.dart';
 
 class CanvasScreen extends StatefulWidget {
   const CanvasScreen({super.key});
@@ -134,6 +135,12 @@ class _CanvasScreenState extends State<CanvasScreen> {
             ),
           ),
 
+          // Priebeh kreslenia – rovnaký pás ako na obrazovkách Text / Obrázok.
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: PlotProgressBar(),
+          ),
+
           // Chyba z controllerа – najčastejšie dôvod alarmu robota
           if (robotProvider.lastControllerError.isNotEmpty)
             Container(
@@ -222,7 +229,7 @@ class _CanvasScreenState extends State<CanvasScreen> {
             ),
           ),
 
-          // Test API Move Buttons A & B
+          // Presun na body A a B (rovnaká orientácia nástroja: 180 / 0 / -90)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16.0),
             child: Row(
@@ -230,12 +237,15 @@ class _CanvasScreenState extends State<CanvasScreen> {
                 Expanded(
                   child: ElevatedButton.icon(
                     onPressed: robotProvider.status.isConnected
-                        ? () => robotProvider.sendThreePointsTest()
+                        ? () => robotProvider.moveToPointA()
                         : null,
-                    icon: const Icon(Icons.linear_scale),
-                    label: const Text('Move A\n(10 pts x 5mm)',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(fontSize: 12)),
+                    icon: const Icon(Icons.home_outlined),
+                    label: Text(
+                      'Move to A\n(${RobotProvider.pointAX.toStringAsFixed(0)}, '
+                      '${RobotProvider.pointAY.toStringAsFixed(0)}, pen up)',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(fontSize: 12),
+                    ),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.teal,
                       foregroundColor: Colors.white,
@@ -247,13 +257,14 @@ class _CanvasScreenState extends State<CanvasScreen> {
                 Expanded(
                   child: ElevatedButton.icon(
                     onPressed: robotProvider.status.isConnected
-                        ? () => robotProvider.moveToPoint(100.0, 100.0, 200.0,
-                            a: -180.0, b: 0.0, c: 90.0)
+                        ? () => robotProvider.moveToPointB()
                         : null,
                     icon: const Icon(Icons.navigation),
-                    label: const Text('Move to B\n(100, 100, 200)',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(fontSize: 12)),
+                    label: Text(
+                      'Move to B\n(${RobotProvider.pointBLabel})',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(fontSize: 12),
+                    ),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.deepOrange,
                       foregroundColor: Colors.white,

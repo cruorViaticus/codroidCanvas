@@ -22,6 +22,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   double _zOffset = 0.0;
   double _penUp = RobotProvider.defaultPenUpHeightMm;
   double _blend = RobotProvider.defaultBlendDistanceMm;
+  double _penWidth = RobotProvider.defaultPenWidthMm;
 
   @override
   void initState() {
@@ -32,6 +33,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _zOffset = provider.zOffsetMm;
     _penUp = provider.penUpNominalZ;
     _blend = provider.blendDistanceMm;
+    _penWidth = provider.penWidthMm;
     _speedController = TextEditingController(text: _speed.toStringAsFixed(0));
     _offsetController = TextEditingController(text: _formatOffset(_zOffset));
   }
@@ -108,6 +110,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await provider.setZOffset(offset);
     await provider.setPenUpHeight(_penUp);
     await provider.setBlendDistance(_blend);
+    await provider.setPenWidth(_penWidth);
 
     messenger.showSnackBar(
       SnackBar(
@@ -117,7 +120,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           '(pen up ${provider.penUpZ.toStringAsFixed(1)} / '
           'down ${provider.penDownZ.toStringAsFixed(1)}) • '
           'lift ${provider.penUpNominalZ.toStringAsFixed(1)} mm • '
-          'blend ${provider.blendDistanceMm.toStringAsFixed(1)} mm',
+          'blend ${provider.blendDistanceMm.toStringAsFixed(1)} mm • '
+          'pen ${provider.penWidthMm.toStringAsFixed(2)} mm',
         ),
       ),
     );
@@ -404,7 +408,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text('Pen Lift & Blending (speed)',
+                      const Text('Pen, Lift & Blending (speed)',
                           style: TextStyle(fontWeight: FontWeight.bold)),
                       const SizedBox(height: 4),
                       Text(
@@ -424,7 +428,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           Expanded(
                             child: Slider(
                               value: _penUp.clamp(
-                                  RobotProvider.minPenUpHeightMm, maxLiftSlider),
+                                  RobotProvider.minPenUpHeightMm,
+                                  maxLiftSlider),
                               min: RobotProvider.minPenUpHeightMm,
                               max: maxLiftSlider,
                               divisions: 19, // kroky po 1 mm
@@ -474,6 +479,42 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         'Blending is sent as zone RELATIVE (zdis) on every '
                         'path point; only the pen-down contact point and the '
                         'end of each packet stay FINE.',
+                        style: TextStyle(
+                            fontSize: 11, color: Colors.grey.shade600),
+                      ),
+                      const Divider(height: 24),
+
+                      // --- Pen line width ---
+                      Row(
+                        children: [
+                          const Icon(Icons.edit, color: Colors.indigo),
+                          Expanded(
+                            child: Slider(
+                              value: _penWidth.clamp(
+                                  RobotProvider.minPenWidthMm,
+                                  RobotProvider.maxPenWidthMm),
+                              min: RobotProvider.minPenWidthMm,
+                              max: RobotProvider.maxPenWidthMm,
+                              divisions: 39, // kroky po 0.05 mm
+                              label: '${_penWidth.toStringAsFixed(2)} mm',
+                              onChanged: (value) =>
+                                  setState(() => _penWidth = value),
+                            ),
+                          ),
+                        ],
+                      ),
+                      Text(
+                        'Pen line width: ${_penWidth.toStringAsFixed(2)} mm '
+                        '(0.2 mm = thin liner)',
+                        style: const TextStyle(fontWeight: FontWeight.w500),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'The pen width is not a motion command – it is used '
+                        'when the drawing is prepared: lines closer than the '
+                        'pen width merge, small gaps are crossed without '
+                        'lifting, and the preview draws exactly this thick '
+                        'line. It is saved as pen_width_mm.',
                         style: TextStyle(
                             fontSize: 11, color: Colors.grey.shade600),
                       ),

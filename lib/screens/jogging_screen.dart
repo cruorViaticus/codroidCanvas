@@ -9,7 +9,7 @@ class JoggingScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final robotProvider = Provider.of<RobotProvider>(context);
-    
+
     // Jogging je povolený, keď je robot pripojený cez API
     final bool isReadyForJog = robotProvider.status.isConnected;
 
@@ -28,15 +28,20 @@ class JoggingScreen extends StatelessWidget {
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: isReadyForJog ? Colors.green.shade100 : Colors.orange.shade100,
+                color: isReadyForJog
+                    ? Colors.green.shade100
+                    : Colors.orange.shade100,
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: isReadyForJog ? Colors.green : Colors.orange),
+                border: Border.all(
+                    color: isReadyForJog ? Colors.green : Colors.orange),
               ),
               child: Row(
                 children: [
                   Icon(
                     isReadyForJog ? Icons.check_circle : Icons.warning,
-                    color: isReadyForJog ? Colors.green.shade800 : Colors.orange.shade800,
+                    color: isReadyForJog
+                        ? Colors.green.shade800
+                        : Colors.orange.shade800,
                   ),
                   const SizedBox(width: 8),
                   Expanded(
@@ -46,7 +51,9 @@ class JoggingScreen extends StatelessWidget {
                           : 'Jogging Disabled — Connect to Robot API first!',
                       style: TextStyle(
                         fontWeight: FontWeight.bold,
-                        color: isReadyForJog ? Colors.green.shade900 : Colors.orange.shade900,
+                        color: isReadyForJog
+                            ? Colors.green.shade900
+                            : Colors.orange.shade900,
                       ),
                     ),
                   ),
@@ -106,7 +113,8 @@ class JoggingScreen extends StatelessWidget {
                           label: 'X-',
                           icon: Icons.keyboard_arrow_left,
                           enabled: isReadyForJog,
-                          onPressedStart: () => robotProvider.startTcpJog(1, -1),
+                          onPressedStart: () =>
+                              robotProvider.startTcpJog(1, -1),
                           onPressedEnd: () => robotProvider.stopTcpJog(),
                         ),
                         const SizedBox(width: 20),
@@ -119,7 +127,8 @@ class JoggingScreen extends StatelessWidget {
                             shape: const CircleBorder(),
                             padding: const EdgeInsets.all(24),
                           ),
-                          child: const Text('STOP', style: TextStyle(fontWeight: FontWeight.bold)),
+                          child: const Text('STOP',
+                              style: TextStyle(fontWeight: FontWeight.bold)),
                         ),
                         const SizedBox(width: 20),
                         // X+ Button
@@ -162,7 +171,8 @@ class JoggingScreen extends StatelessWidget {
                           label: 'Z- (Down)',
                           icon: Icons.arrow_downward,
                           enabled: isReadyForJog,
-                          onPressedStart: () => robotProvider.startTcpJog(3, -1),
+                          onPressedStart: () =>
+                              robotProvider.startTcpJog(3, -1),
                           onPressedEnd: () => robotProvider.stopTcpJog(),
                         ),
                       ],
@@ -180,8 +190,11 @@ class JoggingScreen extends StatelessWidget {
   Widget _coordTile(String axis, double val) {
     return Column(
       children: [
-        Text(axis, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.grey)),
-        Text(val.toStringAsFixed(2), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        Text(axis,
+            style: const TextStyle(
+                fontWeight: FontWeight.bold, color: Colors.grey)),
+        Text(val.toStringAsFixed(2),
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
       ],
     );
   }
@@ -199,7 +212,9 @@ class JoggingScreen extends StatelessWidget {
       onTapUp: enabled ? (_) => onPressedEnd() : null,
       onTapCancel: enabled ? () => onPressedEnd() : null,
       child: ElevatedButton.icon(
-        onPressed: enabled ? () {} : null, // Reakciu na stlačenie/podržanie rieši GestureDetector
+        onPressed: enabled
+            ? () {}
+            : null, // Reakciu na stlačenie/podržanie rieši GestureDetector
         icon: Icon(icon),
         label: Text(label),
         style: ElevatedButton.styleFrom(

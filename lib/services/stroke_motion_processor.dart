@@ -20,6 +20,20 @@ class StrokeMotionProcessor {
   /// API: "continous line motion (30 positions maximum)".
   static const int maxPointsPerPacket = 30;
 
+  /// Najkratší prejazd (mm), ktorý má ešte zmysel so zdvihnutým perom.
+  ///
+  /// Keď ďalší ťah začína bližšie, pero ostane dole a ťahy sa spoja do jednej
+  /// dlhšej čiary. Šetrí to zdvihy a hlavne zamedzí pohybu „tam a hneď späť“,
+  /// ktorý Codroid odmieta (`Cannot transition! ... collinear and in opposite
+  /// directions`).
+  static const double minTraverseMm = 0.4;
+
+  /// Dve pozície bližšie ako toto (mm) považujeme za totožné.
+  ///
+  /// Pod túto hodnotu už controller nemá čo rozlíšiť – taký bod je len
+  /// duplikát, na ktorý by inak nadviazal nulový segment.
+  static const double duplicateToleranceMm = 0.02;
+
   /// Minimálna vzdialenosť dvoch bodov ťahu v mm (filtrovanie vstupu).
   ///
   /// Predvolená hodnota pre voľnú kresbu – detailnejšie režimy (text, obrázok)
@@ -51,17 +65,22 @@ class StrokeMotionProcessor {
       // Do jedného balíka (max 30 bodov) naberieme viac ťahov za sebou.
       final batch = <List<StrokePoint>>[];
       final spacingMm = queue.first.minPointSpacingMm;
+      final penLiftMm = queue.first.penLiftMm;
       int plannedPoints = 0;
 
       while (queue.isNotEmpty && plannedPoints < maxPointsPerPacket) {
         final job = queue.first;
         if (job.minPointSpacingMm != spacingMm) break;
+        // Iný zdvih pera = iná výška nájazdu, do spoločného balíka nepatrí.
+        if (job.penLiftMm != penLiftMm) break;
 
         queue.removeAt(0);
         final path = toMillimetrePath(job.points,
             minPointSpacing: job.minPointSpacingMm);
         if (path.length < 2) {
           debugPrint("⏭️ Príliš krátky ťah preskočený (${path.length} body).");
+          // Preskočený ťah je z pohľadu progress baru hotový.
+          provider.markStrokesPlotted(1);
           continue;
         }
 
@@ -72,72 +91,114 @@ class StrokeMotionProcessor {
 
       if (batch.isEmpty) continue;
 
-      final success = await plotStrokes(batch, minPointSpacing: spacingMm);
+      final success = await plotStrokes(batch,
+          minPointSpacing: spacingMm, penLiftMm: penLiftMm);
       if (!success) {
         queue.clear();
         debugPrint(
             "⛔ Kreslenie prerušené (chyba robota / timeout), fronta vyčistená.");
         return;
       }
+
+      // Balík dojazdil – progress bar sa posunie.
+      provider.markStrokesPlotted(batch.length);
     }
   }
 
   /// Vykreslí jeden ťah.
   Future<bool> plotStroke(List<StrokePoint> stroke,
-          {double? minPointSpacing}) =>
-      plotStrokes([stroke], minPointSpacing: minPointSpacing);
+          {double? minPointSpacing, double? penLiftMm}) =>
+      plotStrokes([stroke],
+          minPointSpacing: minPointSpacing, penLiftMm: penLiftMm);
 
   /// Vykreslí zadané ťahy ako **jednu spojitú dráhu**.
   ///
   /// Medzi ťahmi pero len zdvihne na [RobotProvider.penUpZ] a hneď pokračuje
-  /// prejazdom na začiatok ďalšieho ťahu. Body dráhy sa zaobliavajú
-  /// (`zone.type = RELATIVE`, `zdis = blendMm`), takže robot nezastavuje
-  /// v každom bode. FINE (presné zastavenie) ostáva len tam, kde pero
-  /// dopadá na papier a na konci každého balíka.
+  /// prejazdom na začiatok ďalšieho ťahu – a ak ďalší ťah začína bližšie ako
+  /// [minTraverseMm], pero nezdvihne vôbec a oba ťahy sa spoja do jednej
+  /// dlhšej čiary. Body dráhy sa zaobliavajú (`zone.type = RELATIVE`,
+  /// `zdis = blendMm`), takže robot nezastavuje v každom bode. FINE (presné
+  /// zastavenie) ostáva len tam, kde pero dopadá na papier, na konci každého
+  /// balíka a v 180° obratoch (viď [sanitizePoints]).
   Future<bool> plotStrokes(List<List<StrokePoint>> strokes,
-      {double? minPointSpacing}) async {
+      {double? minPointSpacing, double? penLiftMm}) async {
     final points = <Map<String, dynamic>>[];
+    // Výška zdvihu pre tento balík – z fronty (pattern) alebo z nastavení.
+    final penUpZ = provider.penUpZFor(penLiftMm);
+
+    bool penIsDown = false;
     bool firstStroke = true;
+    // Posledný bod, v ktorom pero kreslilo (pero je na ňom ešte dole).
+    Offset? drawnTo;
+
+    /// Zdvihne pero po nakreslenom ťahu.
+    ///
+    /// Zdvih je odložený až do chvíle, keď je jasné, že ďalší ťah nezačína
+    /// hneď vedľa (vtedy pero ostane dole a čiara pokračuje).
+    void liftPen() {
+      final last = drawnTo;
+      if (!penIsDown || last == null) return;
+      points.add(_blendPoint(last, penUpZ));
+      penIsDown = false;
+    }
 
     for (final stroke in strokes) {
       final path = toMillimetrePath(stroke, minPointSpacing: minPointSpacing);
       if (path.length < 2) continue;
 
-      if (firstStroke) {
-        // Pero musí byť vo vzduchu, až potom klesneme na štart.
-        points.addAll(_approachPoints(path.first));
-        firstStroke = false;
-      } else {
-        // Pero visí nad koncom predchádzajúceho ťahu – stačí prejazd.
-        points.add(_blendPoint(path.first, provider.penUpZ));
-      }
+      // Pero ostane dole, ak ďalší ťah začína tam, kde predchádzajúci skončil
+      // – dva ťahy sa spoja do jednej dlhšej čiary (žiadny zbytočný zdvih).
+      final last = drawnTo;
+      final join = penIsDown &&
+          last != null &&
+          (path.first - last).distance <= minTraverseMm;
 
-      // Klesnutie na papier – presný dotyk, aby čiara začínala presne.
-      points.add(buildCartPoint(
-        path.first.dx,
-        path.first.dy,
-        provider.penDownZ,
-        zoneType: "FINE",
-      ));
+      if (!join) {
+        liftPen();
+
+        if (firstStroke) {
+          // Pero musí byť vo vzduchu, až potom klesneme na štart.
+          points.addAll(_approachPoints(path.first, penUpZ));
+          firstStroke = false;
+        } else {
+          // Pero visí nad koncom predchádzajúceho ťahu – stačí prejazd.
+          points.add(_blendPoint(path.first, penUpZ));
+        }
+
+        // Klesnutie na papier – presný dotyk, aby čiara začínala presne.
+        points.add(buildCartPoint(
+          path.first.dx,
+          path.first.dy,
+          provider.penDownZ,
+          zoneType: "FINE",
+        ));
+        penIsDown = true;
+      }
 
       // Kreslenie – všetky body sa zaoblia (blending = žiadne brzdenie).
       for (int i = 1; i < path.length; i++) {
         points.add(_blendPoint(path[i], provider.penDownZ));
       }
-
-      // Zdvih pera na konci ťahu – plynulo do prejazdu na ďalší ťah.
-      points.add(_blendPoint(path.last, provider.penUpZ));
+      drawnTo = path.last;
     }
+
+    // Zdvíhanie pera na konci celej dávky.
+    liftPen();
 
     if (points.isEmpty) return true;
 
+    // Vyčistené body – bez duplikátov a bez 180° obratov, ktoré controller
+    // odmieta (Cannot transition!).
+    final safe = sanitizePoints(points);
+    if (safe.isEmpty) return true;
+
     // Posledný bod celej dráhy musí presne zastaviť.
-    points[points.length - 1] = _withFineZone(points.last);
+    safe[safe.length - 1] = _withFineZone(safe.last);
 
     // Rozdelenie na balíky po [maxPointsPerPacket] bodoch.
-    for (int start = 0; start < points.length; start += maxPointsPerPacket) {
-      final end = math.min(start + maxPointsPerPacket, points.length);
-      final packet = points.sublist(start, end);
+    for (int start = 0; start < safe.length; start += maxPointsPerPacket) {
+      final end = math.min(start + maxPointsPerPacket, safe.length);
+      final packet = safe.sublist(start, end);
 
       // Koniec balíka = presná pozícia (controller medzi balíkmi zastaví).
       packet[packet.length - 1] = _withFineZone(packet.last);
@@ -251,18 +312,20 @@ class StrokeMotionProcessor {
       );
 
   /// Nájazdové body pred klesnutím pera – pero musí byť vo vzduchu.
-  List<Map<String, dynamic>> _approachPoints(Offset target) {
+  ///
+  /// [penUpZ] = výška zdvihu pre tento balík (predvolená alebo z patternu).
+  List<Map<String, dynamic>> _approachPoints(Offset target, double penUpZ) {
     final points = <Map<String, dynamic>>[];
     final current = provider.status.cartPosition;
     final positionKnown = provider.status.isConnected &&
         !(current.x == 0.0 && current.y == 0.0 && current.z == 0.0);
 
-    if (positionKnown && current.z < provider.penUpZ - 0.5) {
+    if (positionKnown && current.z < penUpZ - 0.5) {
       // Pero je ešte pri papieri (napr. po prerušenom ťahu) – zdvihneme na mieste.
       points.add(buildCartPoint(
         current.x,
         current.y,
-        provider.penUpZ,
+        penUpZ,
         zoneType: "FINE",
       ));
     }
@@ -270,20 +333,107 @@ class StrokeMotionProcessor {
     points.add(buildCartPoint(
       target.dx,
       target.dy,
-      provider.penUpZ,
+      penUpZ,
       zoneType: "FINE",
     ));
 
     return points;
   }
 
-  Map<String, dynamic> _withFineZone(Map<String, dynamic> point) => {
+  /// Bod so zónou FINE – controller sa v ňom presne zastaví.
+  static Map<String, dynamic> _withFineZone(Map<String, dynamic> point) => {
         ...point,
         "zone": {
           "type": "FINE",
           "data": {"zper": 0, "zdis": 0, "zvconst": 0}
         }
       };
+
+  /// Vyčistí body balíka tak, aby controller nemal čo odmietnuť.
+  ///
+  /// Codroid hlási `Cannot transition! Segment X straight line and segment Y
+  /// straight line are collinear and in opposite directions!` vždy, keď sa
+  /// pokúsi zaobliť (blending) dva po sebe idúce segmenty, ktoré idú po tej
+  /// istej čiare opačným smerom – typicky zbytočný „výlet“ tam a hneď späť pri
+  /// veľmi krátkom prejazde. Riešenie je trojité:
+  ///
+  ///  1. totožné body za sebou sa zahodia (nulový segment),
+  ///  2. výlet `A → B → A` sa zruší celý (pero ostane tam, kde bolo),
+  ///  3. ak 180° obrat ostať musí, bod dostane `FINE` – controller tam
+  ///     zastaví a nič nezaobľuje.
+  static List<Map<String, dynamic>> sanitizePoints(
+      List<Map<String, dynamic>> points) {
+    final cleaned = <Map<String, dynamic>>[];
+
+    for (final point in points) {
+      if (cleaned.isEmpty) {
+        cleaned.add(point);
+        continue;
+      }
+      // Dva totožné body za sebou – druhý nepovie robotovi nič nové.
+      if (_samePlace(cleaned.last, point)) continue;
+      // Výlet tam a hneď späť na to isté miesto – zbytočný pohyb.
+      if (cleaned.length >= 2 &&
+          _samePlace(cleaned[cleaned.length - 2], point)) {
+        cleaned.removeLast();
+        continue;
+      }
+      cleaned.add(point);
+    }
+
+    // Obraty o 180°: so zaoblením ich controller neprejde, FINE áno.
+    for (var i = 1; i < cleaned.length - 1; i++) {
+      if (_isReversal(cleaned[i - 1], cleaned[i], cleaned[i + 1])) {
+        cleaned[i] = _withFineZone(cleaned[i]);
+      }
+    }
+
+    return cleaned;
+  }
+
+  /// Sú dve pozície v balíku totožné (v rámci [duplicateToleranceMm])?
+  static bool _samePlace(Map<String, dynamic> a, Map<String, dynamic> b) {
+    final delta = _delta(a, b);
+    return delta.x.abs() <= duplicateToleranceMm &&
+        delta.y.abs() <= duplicateToleranceMm &&
+        delta.z.abs() <= duplicateToleranceMm;
+  }
+
+  /// Idú segmenty `a → b` a `b → c` kolineárne a opačným smerom?
+  ///
+  /// Taký prechod (180° obrat) controller nezaoblí – hlási *Cannot transition!*
+  static bool _isReversal(
+      Map<String, dynamic> a, Map<String, dynamic> b, Map<String, dynamic> c) {
+    final first = _delta(a, b);
+    final second = _delta(b, c);
+    final firstLength =
+        math.sqrt(first.x * first.x + first.y * first.y + first.z * first.z);
+    final secondLength = math
+        .sqrt(second.x * second.x + second.y * second.y + second.z * second.z);
+
+    if (firstLength <= duplicateToleranceMm ||
+        secondLength <= duplicateToleranceMm) {
+      return false;
+    }
+
+    final cosine =
+        (first.x * second.x + first.y * second.y + first.z * second.z) /
+            (firstLength * secondLength);
+    // cos(180°) = −1; tolerancia pokrýva zaokrúhlenie súradníc v telemetrii.
+    return cosine < -0.999;
+  }
+
+  /// Rozdiel dvoch pozícií balíka v mm.
+  static ({double x, double y, double z}) _delta(
+      Map<String, dynamic> from, Map<String, dynamic> to) {
+    final a = from["target"]["cpos"] as Map;
+    final b = to["target"]["cpos"] as Map;
+    return (
+      x: (b["x"] as num).toDouble() - (a["x"] as num).toDouble(),
+      y: (b["y"] as num).toDouble() - (a["y"] as num).toDouble(),
+      z: (b["z"] as num).toDouble() - (a["z"] as num).toDouble(),
+    );
+  }
 
   /// Bod dráhy so zaoblením (blending) – robot ním prejde bez zastavenia.
   Map<String, dynamic> _blendPoint(Offset point, double z) => buildCartPoint(
@@ -305,9 +455,9 @@ class StrokeMotionProcessor {
           "x": x,
           "y": y,
           "z": z,
-          "a": -180.0,
-          "b": 0.0,
-          "c": 90.0,
+          "a": RobotProvider.orientationA,
+          "b": RobotProvider.orientationB,
+          "c": RobotProvider.orientationC,
           "poscfg": {
             "mode": 7,
             "cf1": -1,

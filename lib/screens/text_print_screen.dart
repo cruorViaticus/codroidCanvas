@@ -12,6 +12,7 @@ import '../services/text_stroke_generator.dart';
 import '../widgets/app_logo.dart';
 import '../widgets/paper_format_selector.dart';
 import '../widgets/plot_preview.dart';
+import '../widgets/plot_progress_bar.dart';
 
 /// Režim „Text“: napíš text a robot ho vykreslí jednoťahovým fontom.
 class TextPrintScreen extends StatefulWidget {
@@ -31,6 +32,9 @@ class _TextPrintScreenState extends State<TextPrintScreen> {
   TextAlignment _alignment = TextAlignment.left;
   PlotTransform _transform = const PlotTransform();
 
+  /// Výška zdvihu pera medzi ťahmi (písmenami) v mm nad papierom.
+  double _penLiftMm = RobotProvider.defaultPenUpHeightMm;
+
   /// Formát papiera, pre ktorý je práve vygenerovaný náhľad.
   PaperFormat _paper = kDefaultPaperFormat;
 
@@ -39,7 +43,10 @@ class _TextPrintScreenState extends State<TextPrintScreen> {
   @override
   void initState() {
     super.initState();
-    _paper = Provider.of<RobotProvider>(context, listen: false).paperFormat;
+    final provider = Provider.of<RobotProvider>(context, listen: false);
+    _paper = provider.paperFormat;
+    // Zdvih začína na hodnote z nastavení – dá sa ale zmeniť len pre tento text.
+    _penLiftMm = provider.penUpNominalZ;
     _result = _generate();
     _textController.addListener(_onTextChanged);
   }
@@ -69,7 +76,9 @@ class _TextPrintScreenState extends State<TextPrintScreen> {
   /// Jemné rozlíšenie podľa veľkosti písma (veľké písmo = hrubšie filtrovanie).
   double get _pointSpacingMm => math.min(1.0, math.max(0.3, _fontSizeMm / 20));
 
-  Future<void> _send() async {
+  /// Spustí kreslenie textu: pripraví robota (Auto + Power On), zhodí
+  /// predchádzajúcu dokončenú kresbu a pošle ťahy do fronty.
+  Future<void> _plot() async {
     final provider = Provider.of<RobotProvider>(context, listen: false);
     final messenger = ScaffoldMessenger.of(context);
 
@@ -90,14 +99,23 @@ class _TextPrintScreenState extends State<TextPrintScreen> {
     }
 
     await provider.prepareForPlotting();
-    provider.addStrokes(_plotStrokes, minPointSpacingMm: _pointSpacingMm);
+
+    // Keď nič nebeží, stará kresba už nemá čo robiť – progress bar začína od nuly.
+    if (!provider.isPlotting) provider.clearCanvas();
+
+    provider.addStrokes(
+      _plotStrokes,
+      minPointSpacingMm: _pointSpacingMm,
+      penLiftMm: _penLiftMm,
+    );
 
     messenger.showSnackBar(
       SnackBar(
         content: Text(
-          '🖊️ Do fronty pridaných ${_plotStrokes.length} ťahov '
+          '🖊️ Kreslím ${_plotStrokes.length} ťahov '
           '(${_result.pointCount} bodov, spacing '
-          '${_pointSpacingMm.toStringAsFixed(2)} mm).',
+          '${_pointSpacingMm.toStringAsFixed(2)} mm, '
+          'zdvih ${_penLiftMm.toStringAsFixed(1)} mm).',
         ),
       ),
     );
@@ -199,6 +217,23 @@ class _TextPrintScreenState extends State<TextPrintScreen> {
                 _result = _generate();
               }),
             ),
+            _sliderRow(
+              label: 'Pen lift between strokes',
+              value: '${_penLiftMm.toStringAsFixed(1)} mm',
+            ),
+            Slider(
+              value: _penLiftMm,
+              min: RobotProvider.minPenUpHeightMm,
+              max: 20,
+              divisions: 38,
+              label: '${_penLiftMm.toStringAsFixed(1)} mm',
+              onChanged: (v) => setState(() => _penLiftMm = v),
+            ),
+            Text(
+              'How high the pen rises above the paper between two strokes '
+              '(letters). Higher = safer, but every lift is a longer Z move.',
+              style: TextStyle(color: Colors.blueGrey.shade400, fontSize: 12),
+            ),
             const SizedBox(height: 4),
             Wrap(
               spacing: 8,
@@ -253,6 +288,7 @@ class _TextPrintScreenState extends State<TextPrintScreen> {
                 child: PlotPreview(
                   strokes: _plotStrokes,
                   paper: _paper,
+                  penWidthMm: robotProvider.penWidthMm,
                   emptyLabel: 'Zadaj text pre náhľad',
                 ),
               ),
@@ -274,12 +310,13 @@ class _TextPrintScreenState extends State<TextPrintScreen> {
               ],
             ),
             const SizedBox(height: 16),
+            const PlotProgressBar(),
             FilledButton.icon(
-              onPressed: _send,
+              onPressed: _plot,
               icon: const Icon(Icons.play_arrow),
               label: Text(
                 robotProvider.status.isConnected
-                    ? 'Add to Plot Queue (${_plotStrokes.length} strokes)'
+                    ? 'Plot (${_plotStrokes.length} strokes)'
                     : 'Connect to the robot first',
               ),
               style: FilledButton.styleFrom(

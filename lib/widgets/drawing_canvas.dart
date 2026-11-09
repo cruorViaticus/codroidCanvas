@@ -7,7 +7,6 @@ class DrawingCanvas extends StatefulWidget {
   const DrawingCanvas({super.key});
 
   @override
-
   State<DrawingCanvas> createState() => _DrawingCanvasState();
 }
 
@@ -15,7 +14,6 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
   List<StrokePoint> _currentStroke = [];
 
   @override
-
   Widget build(BuildContext context) {
     final robotProvider = Provider.of<RobotProvider>(context);
 
@@ -38,7 +36,8 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
 
             setState(() {
               _currentStroke = [
-                StrokePoint(x: normalizedX, y: normalizedY, pressure: event.pressure)
+                StrokePoint(
+                    x: normalizedX, y: normalizedY, pressure: event.pressure)
               ];
             });
           },
@@ -50,7 +49,8 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
 
             setState(() {
               _currentStroke.add(
-                StrokePoint(x: normalizedX, y: normalizedY, pressure: event.pressure),
+                StrokePoint(
+                    x: normalizedX, y: normalizedY, pressure: event.pressure),
               );
             });
           },
@@ -82,7 +82,6 @@ class _CanvasPainter extends CustomPainter {
   _CanvasPainter({required this.strokes, required this.currentStroke});
 
   @override
-
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
       ..color = Colors.blue.shade900
@@ -93,7 +92,8 @@ class _CanvasPainter extends CustomPainter {
       if (points.length < 2) return;
       for (int i = 0; i < points.length - 1; i++) {
         final p1 = Offset(points[i].x * size.width, points[i].y * size.height);
-        final p2 = Offset(points[i + 1].x * size.width, points[i + 1].y * size.height);
+        final p2 =
+            Offset(points[i + 1].x * size.width, points[i + 1].y * size.height);
         canvas.drawLine(p1, p2, paint);
       }
     }
@@ -105,6 +105,5 @@ class _CanvasPainter extends CustomPainter {
   }
 
   @override
-
   bool shouldRepaint(covariant _CanvasPainter oldDelegate) => true;
 }

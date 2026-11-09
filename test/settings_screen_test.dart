@@ -56,21 +56,27 @@ void main() {
 
     expect(find.text('Drawing Speed (TCP)'), findsOneWidget);
     expect(find.text('Paper Height / Z Offset'), findsOneWidget);
-    expect(find.text('Pen Lift & Blending (speed)'), findsOneWidget);
-    // štyri slidery: rýchlosť + Z korekcia + zdvih pera + blending
-    expect(find.byType(Slider), findsNWidgets(4));
+    expect(find.text('Pen, Lift & Blending (speed)'), findsOneWidget);
+    // päť sliderov: rýchlosť + Z korekcia + zdvih pera + blending + šírka pera
+    expect(find.byType(Slider), findsNWidgets(5));
     // náhľad výsledných Z výšok bez korekcie
     expect(
-      find.textContaining('Pen up Z: ${provider.penUpNominalZ.toStringAsFixed(1)}'),
+      find.textContaining(
+          'Pen up Z: ${provider.penUpNominalZ.toStringAsFixed(1)}'),
       findsOneWidget,
     );
     expect(
-      find.textContaining('Pen down Z: ${provider.penDownNominalZ.toStringAsFixed(1)}'),
+      find.textContaining(
+          'Pen down Z: ${provider.penDownNominalZ.toStringAsFixed(1)}'),
       findsOneWidget,
     );
     // zdvih pera je predvolene 3 mm
     expect(provider.penUpNominalZ, RobotProvider.defaultPenUpHeightMm);
     expect(provider.penUpNominalZ, 3.0);
+    // šírka stopy pera je predvolene 0,2 mm
+    expect(provider.penWidthMm, RobotProvider.defaultPenWidthMm);
+    expect(provider.penWidthMm, 0.2);
+    expect(find.textContaining('Pen line width: 0.20 mm'), findsOneWidget);
   });
 
   testWidgets('rýchlosť nad 500 mm/s neprejde validáciou', (tester) async {
@@ -112,6 +118,7 @@ void main() {
     expect(provider.penDownZ, closeTo(provider.penDownNominalZ + 10.0, 0.001));
     expect(provider.penUpNominalZ, RobotProvider.defaultPenUpHeightMm);
     expect(provider.blendDistanceMm, RobotProvider.defaultBlendDistanceMm);
+    expect(provider.penWidthMm, RobotProvider.defaultPenWidthMm);
 
     // po uložení sa obrazovka zavrie
     expect(find.text('open settings'), findsOneWidget);

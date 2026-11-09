@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/paper_format.dart';
+import '../models/plot_pattern.dart';
 import '../models/stroke_point.dart';
 import '../providers/robot_provider.dart';
 import '../services/image_stroke_generator.dart';
@@ -12,14 +13,21 @@ import '../services/plot_estimator.dart';
 import '../services/plot_transform.dart';
 import '../widgets/app_logo.dart';
 import '../widgets/paper_format_selector.dart';
+import '../widgets/plot_pattern_selector.dart';
 import '../widgets/plot_preview.dart';
+import '../widgets/plot_progress_bar.dart';
 
 /// Režim „Black & White Image“: vyber obrázok, prahová hodnota ho zmení na
-/// čiernobiele riadky (ako ihličková tlačiareň) a robot ich vykreslí.
+/// čiernobiele ťahy a robot ich vykreslí.
+///
+/// Pattern (vodorovné riadky, stĺpce, 45° šrafovanie, krížové šrafovanie alebo
+/// bodky) sa dá zvoliť; `Auto` nechá generátor vybrať najlacnejší pattern pre
+/// konkrétny obrázok.
 ///
 /// Súbor sa vyberá cez `file_picker`, ktorý funguje na webe (dialóg
-/// prehliadača) aj na Androide/iOS. Dekódovanie ide cez `dart:ui`, takže
-/// nepotrebujeme žiadnu platformovo špecifickú knižnicu.
+/// prehliadača), na Androide a rovnako aj na Windows/Linux/macOS. Dekódovanie
+/// ide cez `dart:ui`, takže nepotrebujeme žiadnu platformovo špecifickú
+/// knižnicu.
 class ImagePrintScreen extends StatefulWidget {
   const ImagePrintScreen({super.key});
 
@@ -43,13 +51,27 @@ class _ImagePrintScreenState extends State<ImagePrintScreen> {
   bool _invert = false;
   PlotTransform _transform = const PlotTransform();
 
+  /// Šírka stopy pera v mm – tenká linka 0,2 mm (dá sa zmeniť pre túto kresbu).
+  double _penWidthMm = RobotProvider.defaultPenWidthMm;
+
+  /// Pattern, ktorým sa obrázok vyplní (`auto` = najlacnejší pre tento obrázok).
+  PlotPattern _pattern = PlotPattern.auto;
+
+  /// Výška zdvihu pera medzi líniami / bodkami (mm nad papierom).
+  double _penLiftMm = RobotProvider.defaultPenUpHeightMm;
+
   /// Formát papiera, pre ktorý sú práve prepočítané riadky.
   PaperFormat _paper = kDefaultPaperFormat;
 
   @override
   void initState() {
     super.initState();
-    _paper = Provider.of<RobotProvider>(context, listen: false).paperFormat;
+    final provider = Provider.of<RobotProvider>(context, listen: false);
+    _paper = provider.paperFormat;
+    // Zdvih začína na hodnote z nastavení – dá sa ale zmeniť len pre túto kresbu.
+    _penLiftMm = provider.penUpNominalZ;
+    // Šírka stopy pera (predvolene 0,2 mm) tiež začína v nastaveniach.
+    _penWidthMm = provider.penWidthMm;
   }
 
   /// Ťahy pripravené na odoslanie (po prípadnom zrkadlení).
@@ -62,11 +84,13 @@ class _ImagePrintScreenState extends State<ImagePrintScreen> {
     if (gray == null) return null;
     return ImageStrokeGenerator.toStrokes(
       gray,
+      pattern: _pattern,
       lineSpacingMm: _lineSpacingMm,
       pointSpacingMm: _pointSpacingMm,
       threshold: _threshold,
       invert: _invert,
       marginMm: _marginMm,
+      penWidthMm: _penWidthMm,
       paper: _paper,
     );
   }
@@ -139,7 +163,12 @@ class _ImagePrintScreenState extends State<ImagePrintScreen> {
     await _decodeBytes(bytes, _fileName ?? 'image');
   }
 
-  Future<void> _send() async {
+  /// Spustí kreslenie obrázka: pripraví robota (Auto + Power On), zhodí
+  /// predchádzajúcu dokončenú kresbu a pošle ťahy do fronty.
+  ///
+  /// Priebeh sa zobrazuje v [PlotProgressBar] pod tlačidlami – netreba
+  /// prechádzať na inú obrazovku.
+  Future<void> _startPlot() async {
     final provider = Provider.of<RobotProvider>(context, listen: false);
     final messenger = ScaffoldMessenger.of(context);
     final strokes = _plotStrokes;
@@ -161,13 +190,24 @@ class _ImagePrintScreenState extends State<ImagePrintScreen> {
     }
 
     await provider.prepareForPlotting();
-    provider.addStrokes(strokes, minPointSpacingMm: _pointSpacingMm);
+
+    // Keď nič nebeží, stará kresba už nemá čo robiť – vyčistíme ju, aby sa
+    // ťahy nekopili a progress bar začínal od nuly.
+    if (!provider.isPlotting) provider.clearCanvas();
+
+    provider.addStrokes(
+      strokes,
+      minPointSpacingMm: _pointSpacingMm,
+      penLiftMm: _penLiftMm,
+    );
 
     messenger.showSnackBar(
       SnackBar(
         content: Text(
-          '🖊️ Do fronty pridaných ${strokes.length} ťahov '
-          '(${_plot?.pointCount ?? 0} bodov).',
+          '🖊️ Kreslím ${strokes.length} ťahov '
+          '(${_plot?.pointCount ?? 0} bodov, '
+          '${_plot?.pattern.label ?? _pattern.label}, '
+          'zdvih ${_penLiftMm.toStringAsFixed(1)} mm).',
         ),
       ),
     );
@@ -238,6 +278,7 @@ class _ImagePrintScreenState extends State<ImagePrintScreen> {
               Text(
                 '${gray.width} × ${gray.height} px • '
                 '${plot?.rowCount ?? 0} riadkov • '
+                '${plot?.pattern.label ?? _pattern.label} • '
                 '${_invert ? 'negatív' : 'čierna = kreslí'}',
                 style: TextStyle(color: Colors.blueGrey.shade400, fontSize: 12),
                 textAlign: TextAlign.center,
@@ -265,6 +306,54 @@ class _ImagePrintScreenState extends State<ImagePrintScreen> {
             const Divider(height: 24),
             const PaperFormatSelector(),
             const Divider(height: 24),
+            PlotPatternSelector(
+              selected: _pattern,
+              resolved: plot?.pattern,
+              onChanged: (pattern) => setState(() {
+                _pattern = pattern;
+                _plot = _buildPlot();
+              }),
+            ),
+            const Divider(height: 24),
+            _sliderRow(
+              'Pen lift between lines / dots',
+              '${_penLiftMm.toStringAsFixed(1)} mm',
+            ),
+            Slider(
+              value: _penLiftMm,
+              min: RobotProvider.minPenUpHeightMm,
+              max: 20,
+              divisions: 38,
+              label: '${_penLiftMm.toStringAsFixed(1)} mm',
+              onChanged: (v) => setState(() => _penLiftMm = v),
+            ),
+            Text(
+              'How high the pen rises above the paper between two lines or '
+              'dots. Higher = safer, but every lift is a longer Z move '
+              '(higher lifts pay off for the Dots pattern).',
+              style: TextStyle(color: Colors.blueGrey.shade400, fontSize: 12),
+            ),
+            _sliderRow(
+              'Pen line width',
+              '${_penWidthMm.toStringAsFixed(2)} mm',
+            ),
+            Slider(
+              value: _penWidthMm.clamp(RobotProvider.minPenWidthMm, 1.0),
+              min: RobotProvider.minPenWidthMm,
+              max: 1.0,
+              divisions: 19, // kroky po 0.05 mm
+              label: '${_penWidthMm.toStringAsFixed(2)} mm',
+              onChanged: (v) => setState(() {
+                _penWidthMm = v;
+                _plot = _buildPlot();
+              }),
+            ),
+            Text(
+              'How wide the pen draws (0.2 mm = thin liner). Lines closer than '
+              'the pen width merge, so the density and the gap bridging follow '
+              'this value – a thicker pen draws fewer, bolder lines.',
+              style: TextStyle(color: Colors.blueGrey.shade400, fontSize: 12),
+            ),
             _sliderRow(
               'Line density',
               '${_lineSpacingMm.toStringAsFixed(1)} mm',
@@ -361,6 +450,7 @@ class _ImagePrintScreenState extends State<ImagePrintScreen> {
                 child: PlotPreview(
                   strokes: _plotStrokes,
                   paper: _paper,
+                  penWidthMm: _penWidthMm,
                   busy: _loading,
                   emptyLabel: 'Vyber obrázok pre náhľad',
                 ),
@@ -374,6 +464,7 @@ class _ImagePrintScreenState extends State<ImagePrintScreen> {
               children: [
                 _stat('Strokes', '${_plotStrokes.length}'),
                 _stat('Points', '${plot?.pointCount ?? 0}'),
+                _stat('Pen', '${_penWidthMm.toStringAsFixed(2)} mm'),
                 _stat(
                   'Length',
                   '${PlotEstimator.pathLengthMm(_plotStrokes, paper: _paper).toStringAsFixed(0)} mm',
@@ -382,12 +473,13 @@ class _ImagePrintScreenState extends State<ImagePrintScreen> {
               ],
             ),
             const SizedBox(height: 16),
+            const PlotProgressBar(),
             FilledButton.icon(
-              onPressed: _send,
+              onPressed: _startPlot,
               icon: const Icon(Icons.play_arrow),
               label: Text(
                 robotProvider.status.isConnected
-                    ? 'Add to Plot Queue (${_plotStrokes.length} strokes)'
+                    ? 'Plot (${_plotStrokes.length} strokes)'
                     : 'Connect to the robot first',
               ),
               style: FilledButton.styleFrom(

@@ -22,12 +22,16 @@ class PlotPreview extends StatelessWidget {
   /// Formát papiera – podľa neho sa nastaví pomer strán náhľadu.
   final PaperFormat paper;
 
+  /// Šírka stopy pera v mm – čiary v náhľade sú tak hrubé ako na papieri.
+  final double penWidthMm;
+
   const PlotPreview({
     super.key,
     required this.strokes,
     this.emptyLabel = 'Zatiaľ nič na kreslenie',
     this.busy = false,
     this.paper = kDefaultPaperFormat,
+    this.penWidthMm = 0.2,
   });
 
   @override
@@ -56,7 +60,13 @@ class PlotPreview extends StatelessWidget {
                   ),
                 ),
               ),
-            CustomPaint(painter: _PlotPreviewPainter(strokes)),
+            CustomPaint(
+              painter: _PlotPreviewPainter(
+                strokes,
+                penWidthMm: penWidthMm,
+                paperWidthMm: paper.widthMm,
+              ),
+            ),
             if (busy)
               const ColoredBox(
                 color: Colors.white70,
@@ -72,14 +82,30 @@ class PlotPreview extends StatelessWidget {
 class _PlotPreviewPainter extends CustomPainter {
   final List<List<StrokePoint>> strokes;
 
-  _PlotPreviewPainter(this.strokes);
+  /// Šírka stopy pera v mm – prepočíta sa na pixely náhľadu.
+  final double penWidthMm;
+
+  /// Šírka papiera v mm (mierka náhľadu).
+  final double paperWidthMm;
+
+  _PlotPreviewPainter(
+    this.strokes, {
+    this.penWidthMm = 0.2,
+    this.paperWidthMm = 210,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
+    // Mierka: koľko pixelov náhľadu má jeden milimeter papiera.
+    final pixelsPerMm = paperWidthMm <= 0 ? 0.0 : size.width / paperWidthMm;
+    // Tenká linka 0,2 mm je na obrazovke pod pixel – preto aspoň 1 px,
+    // aby kresba nezmizla; hrubšie perá sa kreslia v presnej mierke.
+    final strokeWidth = (penWidthMm * pixelsPerMm).clamp(1.0, 24.0).toDouble();
+
     final paint = Paint()
       ..color = Colors.blue.shade900
       ..strokeCap = StrokeCap.round
-      ..strokeWidth = 1.5
+      ..strokeWidth = strokeWidth
       ..style = PaintingStyle.stroke;
 
     for (final stroke in strokes) {
@@ -95,5 +121,7 @@ class _PlotPreviewPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _PlotPreviewPainter oldDelegate) =>
-      oldDelegate.strokes != strokes;
+      oldDelegate.strokes != strokes ||
+      oldDelegate.penWidthMm != penWidthMm ||
+      oldDelegate.paperWidthMm != paperWidthMm;
 }

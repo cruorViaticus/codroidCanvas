@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/robot_provider.dart';
 import '../widgets/app_logo.dart';
+import '../widgets/plot_progress_bar.dart';
 import 'canvas_screen.dart';
 import 'image_print_screen.dart';
 import 'jogging_screen.dart';
@@ -255,6 +256,41 @@ class DashboardScreen extends StatelessWidget {
                   ],
                 ),
               ),
+            ),
+            // Priebeh kreslenia – ostáva viditeľný aj po návrate z inej obrazovky
+            const PlotProgressBar(),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: robotProvider.status.isConnected
+                        ? () => robotProvider.moveToPointA()
+                        : null,
+                    icon: const Icon(Icons.home_outlined),
+                    label: Text(
+                      'Move to A\n'
+                      '(${RobotProvider.pointAX.toStringAsFixed(0)}, '
+                      '${RobotProvider.pointAY.toStringAsFixed(0)}, pen up)',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: robotProvider.status.isConnected
+                        ? () => robotProvider.moveToPointB()
+                        : null,
+                    icon: const Icon(Icons.flight_land),
+                    label: Text(
+                      'Move to B\n(${RobotProvider.pointBLabel})',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 24),
 

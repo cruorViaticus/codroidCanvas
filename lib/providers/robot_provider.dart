@@ -68,6 +68,51 @@ class RobotProvider with ChangeNotifier {
   /// Najväčší povolený polomer zaoblenia (mm).
   static const double maxBlendDistanceMm = 20.0;
 
+  // --- ŠÍRKA STOPY PERA (pen line) ---
+
+  /// Predvolená šírka stopy pera v mm – tenká linka 0,2 mm.
+  ///
+  /// Šírka sa nepoužíva pri pohybe robota (ten kreslí vždy bodovo), ale pri
+  /// príprave kresby: podľa nej sa nastaví minimálny rozostup línií, dĺžka
+  /// bodky a to, akú veľkú medzeru pero ešte prejde bez zdvihnutia. Náhľad
+  /// kreslí čiary presne tak hrubé, ako ich pero nakreslí na papier.
+  static const double defaultPenWidthMm = 0.2;
+
+  /// Najtenšia / najhrubšia použiteľná stopa pera (mm).
+  static const double minPenWidthMm = 0.05;
+  static const double maxPenWidthMm = 2.0;
+
+  // --- ORIENTÁCIA NÁSTROJA & BODY A / B ---
+
+  /// Orientácia nástroja (Euler A/B/C) pre **každý** pohyb – bod A aj bod B.
+  ///
+  /// Rovnaká poloha nástroja ako na teaching pendante, len zapísaná
+  /// v kanonickom tvare: `a = 180°`, `b = 0°`, `c = -90°`. Nikde inde sa
+  /// orientácia nezadáva ručne, aby sa A a B nemohli rozísť.
+  static const double orientationA = 180.0;
+  static const double orientationB = 0.0;
+  static const double orientationC = -90.0;
+
+  /// Bod **A** – miesto, kde kresba začína (X, Y v mm).
+  ///
+  /// Je to „canvas home“: Z sa berie z aktuálnej výšky pera vo vzduchu
+  /// ([penUpZ]), takže sa rešpektuje korekcia papiera. Zvyšok dráhy (body A
+  /// v `sendThreePointsTest`) používa rovnakú orientáciu nástroja.
+  static const double pointAX = 50.0;
+  static const double pointAY = 100.0;
+
+  /// Bod **B** – parkovacia / referenčná poloha nástroja (mm, User Frame 1).
+  ///
+  /// Vysoko nad pracovnou rovinou (200 mm), takže sa robot môže presúvať
+  /// ponad papier bez toho, aby pero zavadzalo.
+  static const double pointBX = 100.0;
+  static const double pointBY = 100.0;
+  static const double pointBZ = 200.0;
+
+  /// Popis súradníc bodu B pre UI (`X, Y, Z` v mm).
+  static String get pointBLabel => '${pointBX.toStringAsFixed(0)}, '
+      '${pointBY.toStringAsFixed(0)}, ${pointBZ.toStringAsFixed(0)} mm';
+
   /// Tolerancia, v ktorej už controller považujeme za "na cieli" (mm).
   static const double arrivalToleranceMm = 0.5;
 
@@ -99,6 +144,16 @@ class RobotProvider with ChangeNotifier {
   set blendDistanceMm(double value) =>
       _blendDistanceMm = value.clamp(0.0, maxBlendDistanceMm).toDouble();
 
+  double _penWidthMm = defaultPenWidthMm;
+
+  /// Šírka stopy pera v mm (predvolene 0,2 mm).
+  ///
+  /// Orezaná na [minPenWidthMm]..[maxPenWidthMm]; ukladá sa ako `pen_width_mm`.
+  double get penWidthMm => _penWidthMm;
+
+  set penWidthMm(double value) =>
+      _penWidthMm = value.clamp(minPenWidthMm, maxPenWidthMm).toDouble();
+
   /// Nominálna výška pera v kontakte s papierom bez korekcie (mm).
   double penDownNominalZ = 0.0;
 
@@ -119,6 +174,17 @@ class RobotProvider with ChangeNotifier {
   /// Výška pera na papieri včetne korekcie papiera – posiela sa robotovi.
   double get penDownZ => penDownNominalZ + _zOffsetMm;
 
+  /// Výška pera vo vzduchu pre konkrétny ťah s vlastným zdvihom [liftMm].
+  ///
+  /// `null` = predvolený zdvih z nastavení ([penUpZ]). Hodnota sa meria od
+  /// papiera (teda od [penDownZ]), takže `liftMm = 8` znamená 8 mm nad
+  /// kontaktnou rovinou papiera – nezávisle od Z korekcie.
+  double penUpZFor(double? liftMm) {
+    if (liftMm == null) return penUpZ;
+    final lift = liftMm.clamp(minPenUpHeightMm, maxPenUpHeightMm).toDouble();
+    return penDownZ + lift;
+  }
+
   static double _clampSpeed(double value) =>
       value.clamp(minLinearSpeed, maxLinearSpeed).toDouble();
 
@@ -128,6 +194,17 @@ class RobotProvider with ChangeNotifier {
   // FIFO Fronta pre asynchrónne spracovanie pohybov
   final List<QueuedStroke> _motionQueue = [];
   bool _isProcessingQueue = false;
+
+  // --- PRIEBEH KRESLENIA (progress bar) ---
+
+  /// Koľko ťahov mala aktuálna kresba celkovo (0 = nič sa nekreslí).
+  int _plotTotalStrokes = 0;
+
+  /// Koľko ťahov z [_plotTotalStrokes] už robot vykreslil.
+  int _plotDoneStrokes = 0;
+
+  /// Kedy sa začala aktuálna kresba (pre odhad zvyšného času).
+  DateTime? _plotStartedAt;
 
   // --- STAV POSLEDNEJ ODPOVEDE Z CONTROLLERA ---
   String _lastControllerError = '';
@@ -140,8 +217,80 @@ class RobotProvider with ChangeNotifier {
   List<List<StrokePoint>> get strokes => _strokes;
   bool get isProcessingQueue => _isProcessingQueue;
 
+  /// Niečo sa práve kreslí – fronta nie je prázdna alebo beží odosielanie.
+  bool get isPlotting => _isProcessingQueue || _motionQueue.isNotEmpty;
+
   /// Počet ťahov čakajúcich vo fronte (kým ich robot vykreslí).
   int get pendingStrokes => _motionQueue.length;
+
+  /// Počet ťahov aktuálnej kresby (0 = žiadna kresba sa nepripravuje).
+  int get plotTotalStrokes => _plotTotalStrokes;
+
+  /// Koľko ťahov z [plotTotalStrokes] už robot vykreslil.
+  int get plotDoneStrokes => _plotDoneStrokes;
+
+  /// Ťahy, ktoré ešte len čakajú na vykreslenie.
+  int get plotRemainingStrokes => _plotTotalStrokes > _plotDoneStrokes
+      ? _plotTotalStrokes - _plotDoneStrokes
+      : 0;
+
+  /// Existuje kresba, ktorej priebeh má zmysel zobrazovať?
+  bool get hasPlotJob => _plotTotalStrokes > 0;
+
+  /// Priebeh kresby 0..1 – presne to, čo ukazuje progress bar.
+  double get plotProgress {
+    if (_plotTotalStrokes == 0) return 0.0;
+    return (_plotDoneStrokes / _plotTotalStrokes).clamp(0.0, 1.0).toDouble();
+  }
+
+  /// Kresba je hotová – všetky ťahy už robot vykreslil.
+  ///
+  /// Zámerne nezávisí od stavu spojenia: posledný balík sa počíta ako
+  /// vykreslený až keď dojazdí, takže „hotovo“ znamená naozaj hotovo.
+  bool get isPlotFinished => hasPlotJob && plotRemainingStrokes == 0;
+
+  /// Ako dlho aktuálna kresba beží (od pridania prvého ťahu).
+  Duration? get plotElapsed {
+    final startedAt = _plotStartedAt;
+    if (startedAt == null) return null;
+    return DateTime.now().difference(startedAt);
+  }
+
+  /// Odhad zvyšného času podľa **reálneho** tempa kreslenia.
+  ///
+  /// `null`, kým nie je vykreslený ani jeden ťah (nedá sa nič odhadnúť).
+  Duration? get plotRemainingTime {
+    final elapsed = plotElapsed;
+    if (elapsed == null || _plotDoneStrokes == 0 || plotRemainingStrokes == 0) {
+      return null;
+    }
+    final millisecondsPerStroke = elapsed.inMilliseconds / _plotDoneStrokes;
+    return Duration(
+      milliseconds: (millisecondsPerStroke * plotRemainingStrokes).round(),
+    );
+  }
+
+  /// Zapíše, že [count] ťahov je vykreslených (volá `StrokeMotionProcessor`).
+  void markStrokesPlotted(int count) {
+    if (count <= 0 || _plotTotalStrokes == 0) return;
+    _plotDoneStrokes += count;
+    if (_plotDoneStrokes > _plotTotalStrokes) {
+      _plotDoneStrokes = _plotTotalStrokes;
+    }
+    notifyListeners();
+  }
+
+  /// Vynuluje priebeh kresby (nová úloha / stop / Clear Canvas).
+  void resetPlotProgress() {
+    if (_plotTotalStrokes == 0 && _plotDoneStrokes == 0) {
+      _plotStartedAt = null;
+      return;
+    }
+    _plotTotalStrokes = 0;
+    _plotDoneStrokes = 0;
+    _plotStartedAt = null;
+    notifyListeners();
+  }
 
   /// Posledná chybová správa z controllerа (prázdny reťazec = bez chyby).
   String get lastControllerError => _lastControllerError;
@@ -215,6 +364,7 @@ class RobotProvider with ChangeNotifier {
         .toDouble();
     penUpNominalZ = prefs.getDouble('pen_up_mm') ?? defaultPenUpHeightMm;
     blendDistanceMm = prefs.getDouble('blend_mm') ?? defaultBlendDistanceMm;
+    penWidthMm = prefs.getDouble('pen_width_mm') ?? defaultPenWidthMm;
     _paperFormat = PaperFormat.fromName(prefs.getString('paper_format'));
     notifyListeners();
   }
@@ -277,6 +427,19 @@ class RobotProvider with ChangeNotifier {
     notifyListeners();
     debugPrint("💾 [SETTINGS] Blending uložený: "
         "${blendDistanceMm.toStringAsFixed(1)} mm");
+  }
+
+  /// Uloží šírku stopy pera (0,05 – 2 mm) do SharedPreferences.
+  ///
+  /// Šírka ovplyvňuje prípravu kresby (rozostup línií, premostenie medzier)
+  /// a hrúbku čiar v náhľade – nie dráhu robota.
+  Future<void> setPenWidth(double value) async {
+    penWidthMm = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble('pen_width_mm', penWidthMm);
+    notifyListeners();
+    debugPrint("💾 [SETTINGS] Šírka pera uložená: "
+        "${penWidthMm.toStringAsFixed(2)} mm");
   }
 
   // --- SPOJENIE A SIEŤOVÝ PING ---
@@ -565,6 +728,7 @@ class RobotProvider with ChangeNotifier {
     _motionSentAt = DateTime.fromMillisecondsSinceEpoch(0);
     _motionDeadline = DateTime.fromMillisecondsSinceEpoch(0);
     _motionRejected = false;
+    resetPlotProgress();
     stopTcpJog();
     _sendJson({
       "id": DateTime.now().millisecondsSinceEpoch,
@@ -634,15 +798,31 @@ class RobotProvider with ChangeNotifier {
   /// [minPointSpacingMm] určuje, ako husto sa body prevedú na dráhu robota.
   /// Voľná kresba necháva `null` (5 mm), text/obrázok posiela jemnejšie
   /// rozlíšenie (typicky 0,3 – 0,8 mm).
+  ///
+  /// [penLiftMm] je výška zdvihu pera medzi ťahmi tejto sady (bodkový pattern
+  /// chce iný zdvih ako súvislé riadky); `null` = predvolená z nastavení.
   void addStrokes(List<List<StrokePoint>> strokes,
-      {double? minPointSpacingMm}) {
+      {double? minPointSpacingMm, double? penLiftMm}) {
     final valid = strokes.where((s) => s.isNotEmpty).toList();
     if (valid.isEmpty) return;
+
+    // Nová kresba = nový progress bar; ťahy pridané počas kreslenia sa
+    // pripočítajú k rozbehnutej úlohe, aby pomer zostal zmysluplný.
+    if (!isPlotting) {
+      _plotTotalStrokes = 0;
+      _plotDoneStrokes = 0;
+    }
+    _plotStartedAt ??= DateTime.now();
+    _plotTotalStrokes += valid.length;
 
     for (final stroke in valid) {
       _strokes.add(stroke);
       _motionQueue.add(
-        QueuedStroke(stroke, minPointSpacingMm: minPointSpacingMm),
+        QueuedStroke(
+          stroke,
+          minPointSpacingMm: minPointSpacingMm,
+          penLiftMm: penLiftMm,
+        ),
       );
     }
     notifyListeners();
@@ -664,6 +844,7 @@ class RobotProvider with ChangeNotifier {
   void clearCanvas() {
     _strokes.clear();
     _motionQueue.clear();
+    resetPlotProgress();
     notifyListeners();
   }
 
@@ -692,8 +873,11 @@ class RobotProvider with ChangeNotifier {
     }
   }
 
-  /// Tvorba bodu pre Codroid controller
-  Map<String, dynamic> _buildCartPoint(double x, double y, double z,
+  /// Tvorba bodu pre Codroid controller (`mov` / `movMulti`).
+  ///
+  /// Orientácia nástroja je vždy [orientationA] / [orientationB] /
+  /// [orientationC] – spoločná pre bod A aj bod B, takže sa nedá „rozísť“.
+  Map<String, dynamic> buildCartPoint(double x, double y, double z,
       {required String zoneType, double? zdis}) {
     return {
       "type": "movl",
@@ -703,9 +887,9 @@ class RobotProvider with ChangeNotifier {
           "x": x,
           "y": y,
           "z": z,
-          "a": -180.0,
-          "b": 0.0,
-          "c": 90.0,
+          "a": orientationA,
+          "b": orientationB,
+          "c": orientationC,
           "poscfg": {
             "mode": 7,
             "cf1": -1,
@@ -763,9 +947,9 @@ class RobotProvider with ChangeNotifier {
             "x": x,
             "y": y,
             "z": z,
-            "a": -180.0,
-            "b": 0.0,
-            "c": 90.0,
+            "a": orientationA,
+            "b": orientationB,
+            "c": orientationC,
             "poscfg": {
               "mode": 7,
               "cf1": -1,
@@ -843,8 +1027,8 @@ class RobotProvider with ChangeNotifier {
     await Future.delayed(const Duration(milliseconds: 300));
 
     List<Map<String, dynamic>> points = [
-      _buildCartPoint(step1X, step1Y, startZ, zoneType: "FINE"),
-      _buildCartPoint(step2X, step2Y, startZ, zoneType: "FINE"),
+      buildCartPoint(step1X, step1Y, startZ, zoneType: "FINE"),
+      buildCartPoint(step2X, step2Y, startZ, zoneType: "FINE"),
     ];
 
     final payload = {
@@ -887,7 +1071,7 @@ class RobotProvider with ChangeNotifier {
       double pz = startZ;
 
       String zone = (i == 10) ? "FINE" : "RELATIVE";
-      points.add(_buildCartPoint(px, py, pz, zoneType: zone, zdis: 4.0));
+      points.add(buildCartPoint(px, py, pz, zoneType: zone, zdis: 4.0));
     }
 
     debugPrint(
@@ -916,8 +1100,13 @@ class RobotProvider with ChangeNotifier {
   }
 
   /// Priamy testovací pohyb na konkrétne kartézske súradnice cez príkaz `mov`
+  ///
+  /// Orientácia nástroja je predvolene [orientationA] / [orientationB] /
+  /// [orientationC] – teda rovnaká ako pri bodoch A aj B.
   Future<void> moveToPoint(double x, double y, double z,
-      {double a = -180.0, double b = 0.0, double c = 90.0}) async {
+      {double a = orientationA,
+      double b = orientationB,
+      double c = orientationC}) async {
     if (_channel == null || !_status.isConnected) {
       debugPrint("⚠️ Cannot send move: Robot is not connected!");
       return;
@@ -984,8 +1173,11 @@ class RobotProvider with ChangeNotifier {
     _sendJson(payload);
   }
 
-  /// Presun robota do domovskej pozície (Z = 15 mm)
-  Future<void> moveToCanvasHome() async {
+  /// Presun robota do štartovacej polohy **A** (X = 50, Y = 100 mm, pero hore).
+  ///
+  /// Odtiaľ začína kresba z canvasu aj z obrázka/textu. Používa orientáciu
+  /// nástroja [orientationA] / [orientationB] / [orientationC].
+  Future<void> moveToPointA() async {
     if (_channel == null || !_status.isConnected) return;
 
     await sendControlCommand(5, "ToAuto");
@@ -995,8 +1187,26 @@ class RobotProvider with ChangeNotifier {
     await sendControlCommand(1, "Power On");
     await Future.delayed(const Duration(milliseconds: 300));
 
-    await _sendSingleMovl(50.0, 100.0, penUpZ, zoneType: "FINE");
+    debugPrint("📍 [POINT A] Presun na X ${pointAX.toStringAsFixed(0)}, "
+        "Y ${pointAY.toStringAsFixed(0)}, Z ${penUpZ.toStringAsFixed(1)}");
+    await _sendSingleMovl(pointAX, pointAY, penUpZ, zoneType: "FINE");
   }
+
+  /// Presun robota do bezpečnej parkovacej polohy **B** (100, 100, 200 mm).
+  ///
+  /// Volá sa po dojazdení kresby alebo pred manipuláciou s papierom – pero je
+  /// 200 mm nad rovinou, takže sa ničoho nedotkne.
+  Future<void> moveToPointB() async {
+    if (_channel == null || !_status.isConnected) return;
+
+    debugPrint("📍 [POINT B] Presun na X ${pointBX.toStringAsFixed(0)}, "
+        "Y ${pointBY.toStringAsFixed(0)}, Z ${pointBZ.toStringAsFixed(0)}, "
+        "A $orientationA / B $orientationB / C $orientationC");
+    await moveToPoint(pointBX, pointBY, pointBZ);
+  }
+
+  /// Pôvodný názov pre štart kresby – zostáva kvôli spätnej kompatibilite.
+  Future<void> moveToCanvasHome() => moveToPointA();
 
   /// Skúšobný zvislý pohyb pera na aktuálnom X/Y – kontrola Z korekcie papiera.
   ///
@@ -1049,8 +1259,8 @@ class RobotProvider with ChangeNotifier {
     double p2Y = startY + 20.0;
 
     List<Map<String, dynamic>> points = [
-      _buildCartPoint(p1X, p1Y, startZ, zoneType: "FINE"),
-      _buildCartPoint(p2X, p2Y, startZ, zoneType: "FINE"),
+      buildCartPoint(p1X, p1Y, startZ, zoneType: "FINE"),
+      buildCartPoint(p2X, p2Y, startZ, zoneType: "FINE"),
     ];
 
     debugPrint("📍 [2-POINT TEST] Odosielam 2 body (FINE) v movMulti...");
@@ -1095,10 +1305,10 @@ class RobotProvider with ChangeNotifier {
     }
 
     List<Map<String, dynamic>> points = [
-      _buildCartPoint(startX + 10.0, startY, startZ, zoneType: "FINE"),
-      _buildCartPoint(startX + 10.0, startY + 10.0, startZ,
+      buildCartPoint(startX + 10.0, startY, startZ, zoneType: "FINE"),
+      buildCartPoint(startX + 10.0, startY + 10.0, startZ,
           zoneType: "RELATIVE", zdis: 4.0),
-      _buildCartPoint(startX + 10.0, startY + 20.0, startZ, zoneType: "FINE"),
+      buildCartPoint(startX + 10.0, startY + 20.0, startZ, zoneType: "FINE"),
     ];
 
     debugPrint(
