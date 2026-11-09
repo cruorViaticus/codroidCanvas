@@ -3,6 +3,7 @@ import 'dart:ui' show Offset;
 
 import 'package:flutter/foundation.dart';
 
+import '../models/queued_stroke.dart';
 import '../models/stroke_point.dart';
 import '../providers/robot_provider.dart';
 
@@ -20,6 +21,9 @@ class StrokeMotionProcessor {
   static const int maxPointsPerPacket = 30;
 
   /// Minimálna vzdialenosť dvoch bodov ťahu v mm (filtrovanie vstupu).
+  ///
+  /// Predvolená hodnota pre voľnú kresbu – detailnejšie režimy (text, obrázok)
+  /// si posielajú vlastnú hodnotu cez [QueuedStroke.minPointSpacingMm].
   static const double minPointSpacingMm = 5.0;
 
   final RobotProvider provider;
@@ -36,7 +40,9 @@ class StrokeMotionProcessor {
   ///
   /// Ťahy, ktoré už čakajú vo fronte, sa spájajú do jednej spojitej dráhy –
   /// robot medzi nimi nezastavuje, iba zdvihne pero o [RobotProvider.penUpZ].
-  Future<void> processQueue(List<List<StrokePoint>> queue) async {
+  /// Do jedného balíka sa naberajú len ťahy s rovnakou hustotou bodov, aby
+  /// jemný text/obrázok nezhltol hrubé filtrovanie a naopak.
+  Future<void> processQueue(List<QueuedStroke> queue) async {
     if (!provider.status.isConnected) return;
 
     while (queue.isNotEmpty) {
@@ -44,28 +50,29 @@ class StrokeMotionProcessor {
 
       // Do jedného balíka (max 30 bodov) naberieme viac ťahov za sebou.
       final batch = <List<StrokePoint>>[];
+      final spacingMm = queue.first.minPointSpacingMm;
       int plannedPoints = 0;
 
       while (queue.isNotEmpty && plannedPoints < maxPointsPerPacket) {
-        final stroke = queue.first;
-        final path = toMillimetrePath(stroke);
+        final job = queue.first;
+        if (job.minPointSpacingMm != spacingMm) break;
 
-        if (queue.isNotEmpty && identical(queue.first, stroke)) {
-          queue.removeAt(0);
-        }
+        queue.removeAt(0);
+        final path = toMillimetrePath(job.points,
+            minPointSpacing: job.minPointSpacingMm);
         if (path.length < 2) {
           debugPrint("⏭️ Príliš krátky ťah preskočený (${path.length} body).");
           continue;
         }
 
-        batch.add(stroke);
+        batch.add(job.points);
         // kreslenie + zdvih + prejazd + klesnutie
         plannedPoints += path.length + 3;
       }
 
       if (batch.isEmpty) continue;
 
-      final success = await plotStrokes(batch);
+      final success = await plotStrokes(batch, minPointSpacing: spacingMm);
       if (!success) {
         queue.clear();
         debugPrint(
@@ -76,7 +83,9 @@ class StrokeMotionProcessor {
   }
 
   /// Vykreslí jeden ťah.
-  Future<bool> plotStroke(List<StrokePoint> stroke) => plotStrokes([stroke]);
+  Future<bool> plotStroke(List<StrokePoint> stroke,
+          {double? minPointSpacing}) =>
+      plotStrokes([stroke], minPointSpacing: minPointSpacing);
 
   /// Vykreslí zadané ťahy ako **jednu spojitú dráhu**.
   ///
@@ -85,12 +94,13 @@ class StrokeMotionProcessor {
   /// (`zone.type = RELATIVE`, `zdis = blendMm`), takže robot nezastavuje
   /// v každom bode. FINE (presné zastavenie) ostáva len tam, kde pero
   /// dopadá na papier a na konci každého balíka.
-  Future<bool> plotStrokes(List<List<StrokePoint>> strokes) async {
+  Future<bool> plotStrokes(List<List<StrokePoint>> strokes,
+      {double? minPointSpacing}) async {
     final points = <Map<String, dynamic>>[];
     bool firstStroke = true;
 
     for (final stroke in strokes) {
-      final path = toMillimetrePath(stroke);
+      final path = toMillimetrePath(stroke, minPointSpacing: minPointSpacing);
       if (path.length < 2) continue;
 
       if (firstStroke) {
@@ -204,12 +214,18 @@ class StrokeMotionProcessor {
 
   /// Prevod normalizovaných bodov canvasu na milimetre robota
   /// (s filtrovaním príliš krátkych úsekov).
-  List<Offset> toMillimetrePath(List<StrokePoint> stroke) {
+  ///
+  /// [minPointSpacing] = minimálna vzdialenosť dvoch bodov v mm; `null` použije
+  /// predvolených [minPointSpacingMm] (5 mm pre voľnú kresbu). Text a obrázky
+  /// posielajú menšiu hodnotu, inak by sa jemné detaily zliali do hrubých čiar.
+  List<Offset> toMillimetrePath(List<StrokePoint> stroke,
+      {double? minPointSpacing}) {
+    final spacing = minPointSpacing ?? minPointSpacingMm;
     final path = <Offset>[];
 
     for (final point in stroke) {
       final mm = toMillimetres(point);
-      if (path.isEmpty || (mm - path.last).distance >= minPointSpacingMm) {
+      if (path.isEmpty || (mm - path.last).distance >= spacing) {
         path.add(mm);
       }
     }
@@ -223,8 +239,16 @@ class StrokeMotionProcessor {
     return path;
   }
 
-  Offset toMillimetres(StrokePoint point) =>
-      Offset((1.0 - point.y) * 297.0, (1.0 - point.x) * 210.0);
+  /// Prevod normalizovaného bodu canvasu na milimetre robota.
+  ///
+  /// Canvas (aj náhľad) je na výšku: `y` = 0 je horný okraj, `x` = 0 je ľavý
+  /// okraj. Robot preto kreslí zvislú os canvasu pozdĺž **X** a vodorovnú
+  /// pozdĺž **Y** – dlhšia strana papiera tak vždy leží v smere X, bez ohľadu
+  /// na zvolený formát (A4, A3, A5, 10 × 15).
+  Offset toMillimetres(StrokePoint point) => Offset(
+        (1.0 - point.y) * provider.paperHeightMm,
+        (1.0 - point.x) * provider.paperWidthMm,
+      );
 
   /// Nájazdové body pred klesnutím pera – pero musí byť vo vzduchu.
   List<Map<String, dynamic>> _approachPoints(Offset target) {
@@ -286,7 +310,13 @@ class StrokeMotionProcessor {
           "c": 90.0,
           "poscfg": {
             "mode": 7,
-            "cf1": -1, "cf2": -1, "cf3": -1, "cf4": -1, "cf5": -1, "cf6": -1, "cf7": -1
+            "cf1": -1,
+            "cf2": -1,
+            "cf3": -1,
+            "cf4": -1,
+            "cf5": -1,
+            "cf6": -1,
+            "cf7": -1
           }
         }
       },
@@ -311,11 +341,7 @@ class StrokeMotionProcessor {
             }
           : {
               "type": "RELATIVE",
-              "data": {
-                "zper": 50,
-                "zdis": zdis ?? blendMm,
-                "zvconst": 50
-              }
+              "data": {"zper": 50, "zdis": zdis ?? blendMm, "zvconst": 50}
             }
     };
   }

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../models/paper_format.dart';
 import '../models/stroke_point.dart';
 import '../providers/robot_provider.dart';
 import '../widgets/app_logo.dart';
@@ -60,6 +61,20 @@ class _CanvasScreenState extends State<CanvasScreen> {
         backgroundColor: Colors.indigo,
         foregroundColor: Colors.white,
         actions: [
+          // Formát papiera sa dá prepnúť aj priamo pri kreslení.
+          PopupMenuButton<PaperFormat>(
+            tooltip: 'Paper format',
+            icon: const Icon(Icons.description_outlined),
+            initialValue: robotProvider.paperFormat,
+            onSelected: (format) => robotProvider.setPaperFormat(format),
+            itemBuilder: (context) => [
+              for (final format in PaperFormat.values)
+                PopupMenuItem<PaperFormat>(
+                  value: format,
+                  child: Text('${format.label}  (${format.sizeLabel})'),
+                ),
+            ],
+          ),
           IconButton(
             icon: const Icon(Icons.delete_sweep),
             tooltip: 'Clear Canvas',
@@ -132,7 +147,8 @@ class _CanvasScreenState extends State<CanvasScreen> {
                   Expanded(
                     child: Text(
                       robotProvider.lastControllerError,
-                      style: TextStyle(color: Colors.red.shade900, fontSize: 12),
+                      style:
+                          TextStyle(color: Colors.red.shade900, fontSize: 12),
                     ),
                   ),
                   TextButton(
@@ -143,13 +159,13 @@ class _CanvasScreenState extends State<CanvasScreen> {
               ),
             ),
 
-          // Canvas A4 paper
+          // Canvas = papier v zvolenom formáte (A4 / A3 / A5 / 10 × 15)
           Expanded(
             child: Center(
               child: Padding(
                 padding: const EdgeInsets.all(16.0),
                 child: AspectRatio(
-                  aspectRatio: 210 / 297,
+                  aspectRatio: robotProvider.paperAspectRatio,
                   child: Container(
                     key: _paperKey,
                     decoration: BoxDecoration(
@@ -158,7 +174,7 @@ class _CanvasScreenState extends State<CanvasScreen> {
                       border: Border.all(color: Colors.indigo, width: 2),
                       boxShadow: [
                         BoxShadow(
-                          color: Colors.black.withOpacity(0.15),
+                          color: Colors.black.withValues(alpha: 0.15),
                           blurRadius: 10,
                           offset: const Offset(0, 4),
                         ),
@@ -167,8 +183,8 @@ class _CanvasScreenState extends State<CanvasScreen> {
                     child: Listener(
                       behavior: HitTestBehavior.opaque,
                       onPointerDown: (event) {
-                        final point = _getNormalizedPoint(
-                            event.position, event.pressure);
+                        final point =
+                            _getNormalizedPoint(event.position, event.pressure);
                         if (point != null) {
                           setState(() {
                             _currentStroke = [point];
@@ -176,8 +192,8 @@ class _CanvasScreenState extends State<CanvasScreen> {
                         }
                       },
                       onPointerMove: (event) {
-                        final point = _getNormalizedPoint(
-                            event.position, event.pressure);
+                        final point =
+                            _getNormalizedPoint(event.position, event.pressure);
                         if (point != null) {
                           setState(() {
                             _currentStroke.add(point);
@@ -206,48 +222,48 @@ class _CanvasScreenState extends State<CanvasScreen> {
             ),
           ),
 
-         // Test API Move Buttons A & B
-Padding(
-  padding: const EdgeInsets.symmetric(horizontal: 16.0),
-  child: Row(
-    children: [
-      Expanded(
-        child: ElevatedButton.icon(
-          onPressed: robotProvider.status.isConnected
-              ? () => robotProvider.sendThreePointsTest()
-              : null,
-          icon: const Icon(Icons.linear_scale),
-          label: const Text('Move A\n(10 pts x 5mm)',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 12)),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.teal,
-            foregroundColor: Colors.white,
-            padding: const EdgeInsets.symmetric(vertical: 12),
+          // Test API Move Buttons A & B
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16.0),
+            child: Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: robotProvider.status.isConnected
+                        ? () => robotProvider.sendThreePointsTest()
+                        : null,
+                    icon: const Icon(Icons.linear_scale),
+                    label: const Text('Move A\n(10 pts x 5mm)',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: 12)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.teal,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: robotProvider.status.isConnected
+                        ? () => robotProvider.moveToPoint(100.0, 100.0, 200.0,
+                            a: -180.0, b: 0.0, c: 90.0)
+                        : null,
+                    icon: const Icon(Icons.navigation),
+                    label: const Text('Move to B\n(100, 100, 200)',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: 12)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.deepOrange,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
-        ),
-      ),
-      const SizedBox(width: 12),
-      Expanded(
-        child: ElevatedButton.icon(
-          onPressed: robotProvider.status.isConnected
-              ? () => robotProvider.moveToPoint(100.0, 100.0, 200.0,
-                  a: -180.0, b: 0.0, c: 90.0)
-              : null,
-          icon: const Icon(Icons.navigation),
-          label: const Text('Move to B\n(100, 100, 200)',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 12)),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.deepOrange,
-            foregroundColor: Colors.white,
-            padding: const EdgeInsets.symmetric(vertical: 12),
-          ),
-        ),
-      ),
-    ],
-  ),
-),
 
           // Emergency Stop Button
           Padding(
@@ -259,7 +275,8 @@ Padding(
                   robotProvider.stopMovement();
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
-                      content: Text('🛑 Emergency Stop Odoslaný & Fronta vyčistená!'),
+                      content: Text(
+                          '🛑 Emergency Stop Odoslaný & Fronta vyčistená!'),
                       backgroundColor: Colors.red,
                     ),
                   );

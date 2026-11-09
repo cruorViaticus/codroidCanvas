@@ -3,8 +3,10 @@ import 'package:provider/provider.dart';
 import '../providers/robot_provider.dart';
 import '../widgets/app_logo.dart';
 import 'canvas_screen.dart';
+import 'image_print_screen.dart';
 import 'jogging_screen.dart';
 import 'settings_screen.dart';
+import 'text_print_screen.dart';
 
 class DashboardScreen extends StatelessWidget {
   const DashboardScreen({super.key});
@@ -226,8 +228,10 @@ class DashboardScreen extends StatelessWidget {
                       style: TextStyle(fontWeight: FontWeight.bold),
                     ),
                     const Divider(),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    Wrap(
+                      spacing: 24,
+                      runSpacing: 8,
+                      alignment: WrapAlignment.spaceAround,
                       children: [
                         _infoChip('Feed',
                             '${robotProvider.linearSpeed.toStringAsFixed(0)} mm/s'),
@@ -240,6 +244,11 @@ class DashboardScreen extends StatelessWidget {
                           'Pen Z (up/down)',
                           '${robotProvider.penUpZ.toStringAsFixed(1)} / '
                               '${robotProvider.penDownZ.toStringAsFixed(1)}',
+                        ),
+                        _infoChip(
+                          'Paper',
+                          '${robotProvider.paperFormat.label} '
+                              '(${robotProvider.paperFormat.sizeLabel})',
                         ),
                       ],
                     ),
@@ -261,6 +270,40 @@ class DashboardScreen extends StatelessWidget {
               label: const Text('Open S Pen Canvas'),
               style: ElevatedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 16),
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            ElevatedButton.icon(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const TextPrintScreen()),
+                );
+              },
+              icon: const Icon(Icons.text_fields),
+              label: const Text('Plot Text'),
+              style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                backgroundColor: Colors.indigo.shade400,
+                foregroundColor: Colors.white,
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            ElevatedButton.icon(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const ImagePrintScreen()),
+                );
+              },
+              icon: const Icon(Icons.image),
+              label: const Text('Plot Black & White Image'),
+              style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                backgroundColor: Colors.indigo.shade400,
+                foregroundColor: Colors.white,
               ),
             ),
             const SizedBox(height: 12),

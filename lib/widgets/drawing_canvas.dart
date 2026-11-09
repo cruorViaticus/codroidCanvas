@@ -20,7 +20,8 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
     final robotProvider = Provider.of<RobotProvider>(context);
 
     return AspectRatio(
-      aspectRatio: 210 / 297, // A4 Aspect Ratio matching physical paper
+      // Pomer strán podľa zvoleného papiera (A4 / A3 / A5 / 10 × 15).
+      aspectRatio: robotProvider.paperAspectRatio,
       child: Container(
         decoration: BoxDecoration(
           color: Colors.white,

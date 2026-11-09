@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/robot_provider.dart';
 import '../widgets/app_logo.dart';
+import '../widgets/paper_format_selector.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -189,6 +190,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         validator: (val) => val == null || val.isEmpty
                             ? 'Enter valid IP'
                             : null,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+
+              // ---------- PAPER FORMAT ----------
+              Card(
+                elevation: 2,
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const PaperFormatSelector(),
+                      const SizedBox(height: 10),
+                      Text(
+                        'Saved immediately and used by every plot mode. '
+                        'The longer side of the sheet always lies along the '
+                        'robot X axis, so the paper never has to be rotated.',
+                        style: TextStyle(
+                          color: Colors.blueGrey.shade400,
+                          fontSize: 12,
+                        ),
                       ),
                     ],
                   ),

@@ -1,12 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
+import '../models/paper_format.dart';
+import '../models/queued_stroke.dart';
 import '../models/robot_status.dart';
 import '../models/stroke_point.dart';
+import '../services/network_probe.dart';
 import '../services/stroke_motion_processor.dart';
 
 class RobotProvider with ChangeNotifier {
@@ -18,9 +19,24 @@ class RobotProvider with ChangeNotifier {
   Timer? _jogHeartbeatTimer;
   Timer? _heartbeatTimer;
 
-  // Kalibrácia pre papier A4 (297 mm v smere X+)
-  double paperWidthMm = 210.0;
-  double paperHeightMm = 297.0;
+  // --- FORMÁT PAPIERA (A4 / A3 / A5 / fotopapier 10 × 15) ---
+
+  PaperFormat _paperFormat = kDefaultPaperFormat;
+
+  /// Aktuálne zvolený formát papiera.
+  ///
+  /// Dlhšia strana papiera leží vždy v smere **X** robota, kratšia v smere
+  /// **Y** – papier sa preto neotáča, len sa menia rozmery v milimetroch.
+  PaperFormat get paperFormat => _paperFormat;
+
+  /// Šírka papiera v mm = kratšia strana (vodorovná os canvasu, os Y robota).
+  double get paperWidthMm => _paperFormat.widthMm;
+
+  /// Výška papiera v mm = dlhšia strana (zvislá os canvasu, os X robota).
+  double get paperHeightMm => _paperFormat.heightMm;
+
+  /// Pomer strán papiera na výšku (canvas + náhľady).
+  double get paperAspectRatio => _paperFormat.aspectRatio;
 
   // --- RÝCHLOSŤ & Z KOREKCIA (nastaviteľné v Settings) ---
 
@@ -110,7 +126,7 @@ class RobotProvider with ChangeNotifier {
   final List<List<StrokePoint>> _strokes = [];
 
   // FIFO Fronta pre asynchrónne spracovanie pohybov
-  final List<List<StrokePoint>> _motionQueue = [];
+  final List<QueuedStroke> _motionQueue = [];
   bool _isProcessingQueue = false;
 
   // --- STAV POSLEDNEJ ODPOVEDE Z CONTROLLERA ---
@@ -198,9 +214,21 @@ class RobotProvider with ChangeNotifier {
         .clamp(-maxZOffsetMm, maxZOffsetMm)
         .toDouble();
     penUpNominalZ = prefs.getDouble('pen_up_mm') ?? defaultPenUpHeightMm;
-    blendDistanceMm =
-        prefs.getDouble('blend_mm') ?? defaultBlendDistanceMm;
+    blendDistanceMm = prefs.getDouble('blend_mm') ?? defaultBlendDistanceMm;
+    _paperFormat = PaperFormat.fromName(prefs.getString('paper_format'));
     notifyListeners();
+  }
+
+  /// Uloží zvolený formát papiera (A4 / A3 / A5 / 10 × 15) a hneď ho použije
+  /// pri prevode normalizovaných súradníc na milimetre robota.
+  Future<void> setPaperFormat(PaperFormat format) async {
+    if (_paperFormat == format) return;
+    _paperFormat = format;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('paper_format', format.name);
+    debugPrint("💾 [SETTINGS] Formát papiera: ${format.label} "
+        "(${format.sizeLabel}, dlhšia strana = X)");
   }
 
   Future<void> setIpAddress(String ip) async {
@@ -260,7 +288,9 @@ class RobotProvider with ChangeNotifier {
     try {
       _stopHeartbeat();
       _channel?.sink.close();
-      _channel = IOWebSocketChannel.connect(
+      // `WebSocketChannel.connect` je cross-platform (dart:io aj prehliadač),
+      // takže rovnaký kód funguje na mobile, desktope aj vo web verzii.
+      _channel = WebSocketChannel.connect(
         Uri.parse('ws://$_ipAddress:9000'),
       );
 
@@ -453,19 +483,11 @@ class RobotProvider with ChangeNotifier {
     await sendControlCommand(100, 'ClearError');
   }
 
-  Future<bool> pingNetworkIP() async {
-    try {
-      final socket = await Socket.connect(
-        _ipAddress,
-        80,
-        timeout: const Duration(milliseconds: 1500),
-      );
-      socket.destroy();
-      return true;
-    } catch (e) {
-      return false;
-    }
-  }
+  /// Skontroluje dosiahnuteľnosť controllera na [ipAddress] (port 9000).
+  ///
+  /// Namiesto `dart:io` Socket (ktorý na webe neexistuje) sa skúsi otvoriť
+  /// WebSocket – funguje rovnako v prehliadači aj na mobile.
+  Future<bool> pingNetworkIP() => pingController(_ipAddress);
 
   // --- HEARTBEAT & TELEMETRIA ---
 
@@ -605,14 +627,38 @@ class RobotProvider with ChangeNotifier {
 
   // --- FIFO SPRACUVOVANIE ŤAHOV & KRESLENIE ---
 
-  void addStroke(List<StrokePoint> stroke) {
-    if (stroke.isNotEmpty) {
-      _strokes.add(stroke);
-      _motionQueue.add(stroke);
-      notifyListeners();
+  void addStroke(List<StrokePoint> stroke) => addStrokes([stroke]);
 
-      _processMotionQueue();
+  /// Pridá naraz celú sadu ťahov (text, obrázok) do fronty.
+  ///
+  /// [minPointSpacingMm] určuje, ako husto sa body prevedú na dráhu robota.
+  /// Voľná kresba necháva `null` (5 mm), text/obrázok posiela jemnejšie
+  /// rozlíšenie (typicky 0,3 – 0,8 mm).
+  void addStrokes(List<List<StrokePoint>> strokes,
+      {double? minPointSpacingMm}) {
+    final valid = strokes.where((s) => s.isNotEmpty).toList();
+    if (valid.isEmpty) return;
+
+    for (final stroke in valid) {
+      _strokes.add(stroke);
+      _motionQueue.add(
+        QueuedStroke(stroke, minPointSpacingMm: minPointSpacingMm),
+      );
     }
+    notifyListeners();
+
+    _processMotionQueue();
+  }
+
+  /// Pripraví robota na kreslenie (Auto mód + Power On) a počká na ustálenie.
+  ///
+  /// Používajú to režimy Text / Obrázok, ktoré na rozdiel od canvasu
+  /// nevyžadujú presun na domovský bod – pero má stáť tam, kde ho používateľ
+  /// nastavil.
+  Future<void> prepareForPlotting() async {
+    if (_channel == null || !_status.isConnected) return;
+    await setRobotMode(true);
+    await Future.delayed(const Duration(milliseconds: 300));
   }
 
   void clearCanvas() {

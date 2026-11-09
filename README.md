@@ -3,9 +3,51 @@
 Flutter app that turns a Codroid S arm into a pen plotter (S Pen canvas →
 `movMulti` packets over WebSocket → robot controller).
 
+## Plot modes
+
+| Mode | Entry point | What it does |
+| --- | --- | --- |
+| **Freehand (S Pen)** | `lib/screens/canvas_screen.dart` | draw with the pen, canvas → `movMulti` |
+| **Text** | *Plot Text* on the dashboard → `lib/screens/text_print_screen.dart` | types the text with a single-stroke vector font (`lib/services/vector_font.dart`). No `TextPainter`: every glyph is a set of polylines, so the pen draws exactly what the robot can plot |
+| **Black & white image** | *Plot Black & White Image* → `lib/screens/image_print_screen.dart` | picks a file with `file_picker`, decodes it with `dart:ui` (no native plugin), converts it to grayscale and traces it line by line (serpentine scanline) into plot strokes |
+
+Both generators share the same plumbing:
+
+* **Paper format** – A4, A3, A5 or 10 × 15 cm photo paper
+  (`lib/models/paper_format.dart`). The **longer side of the sheet always lies
+  along the robot X axis**, the shorter one along Y, so the sheet is never
+  rotated: the canvas, the preview and the generated strokes just use the
+  chosen millimetre dimensions (`lib/widgets/paper_format_selector.dart`,
+  persisted as `paper_format`, default `a4`).
+* **Live preview** (`lib/widgets/plot_preview.dart`, aspect ratio follows the
+  selected paper) + stats – lines, strokes, points, path length and estimated
+  time (`lib/services/plot_estimator.dart`).
+* **Mirror X / Y** (`lib/services/plot_transform.dart`) for plotting on the
+  back of the paper or mirroring a template.
+* **Fine point spacing** – text/image strokes are queued with a custom
+  `minPointSpacingMm` (0.3 – 1 mm) instead of the 5 mm freehand filter, so the
+  controller does not cut off curves.
+* **Add to plot queue** – `RobotProvider.addStrokes()` appends the whole set in
+  one go; *Clear Canvas* empties the queue.
+
+**Text** options: letter height 3 – 40 mm, line spacing 1 – 3×, paper margin
+0 – 60 mm, left / center / right alignment, automatic wrapping, diacritics
+normalised to the base letter, notices for unknown characters and for text that
+does not fit the paper.
+
+**Image** options: line density 0.4 – 4 mm, point spacing 0.2 – 2 mm, threshold
+5 – 95 %, margin 0 – 40 mm, optional invert (plot the light areas) and a
+truncation notice when the drawing hits
+`ImageStrokeGenerator.defaultMaxPoints`.
+
 ## Calibration & Settings
 
 * **Robot IP Address** – controller IP (`ws://<ip>:9000`).
+* **Paper format** – A4 (210 × 297 mm), A3 (297 × 420 mm), A5 (148 × 210 mm) or
+  photo paper 10 × 15 cm (100 × 150 mm). Saved immediately (`paper_format`) and
+  offered on the text/image screens too. The longer side is mapped to the robot
+  **X** axis, the shorter one to **Y** – so `movl` coordinates never exceed the
+  sheet even if it is smaller than A4.
 * **Drawing Speed (TCP)** – pen feed rate sent as `speed.stcp`, clamped to
   **10 – 500 mm/s** (robot limit). Persisted as `linear_speed`.
 * **Paper Height / Z Offset** – shifts the whole pen path up or down by up to
@@ -72,4 +114,11 @@ flutter test tool/generate_app_icons.dart
 ```bash
 flutter test
 ```
+
+* Generators / geometry – `test/text_stroke_generator_test.dart`,
+  `test/image_stroke_generator_test.dart`, `test/plot_queue_spacing_test.dart`,
+  `test/paper_format_test.dart` (paper formats, persistence, mm mapping).
+* Screens – `test/text_print_screen_test.dart`,
+  `test/image_print_screen_test.dart`, `test/settings_screen_test.dart`.
+* Motion – `test/stroke_motion_processor_test.dart`.
 
