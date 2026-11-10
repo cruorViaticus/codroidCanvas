@@ -123,4 +123,67 @@ void main() {
 
     expect(find.byIcon(Icons.warning_amber), findsOneWidget);
   });
+
+  /// Počká, kým sa tlačený text dorasterizuje.
+  ///
+  /// Rasterizácia reálneho fontu beží mimo testovacieho „fake“ času, preto sa
+  /// čaká cez [WidgetTester.runAsync] a frame sa pumpuje mimo neho.
+  Future<void> waitForPreview(WidgetTester tester) async {
+    for (var i = 0; i < 60; i++) {
+      if (!tester.widget<PlotPreview>(find.byType(PlotPreview)).busy) return;
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 100)),
+      );
+      await tester.pump();
+    }
+    fail('Tlačený text sa nevygeneroval včas.');
+  }
+
+  testWidgets('TextPrintScreen vie prepnúť na tlačený reálny font',
+      (tester) async {
+    await pumpTextPrint(tester);
+
+    await tester.tap(find.text('Printed (real font)'));
+    await tester.pump();
+    await waitForPreview(tester);
+
+    expect(find.text('Outline'), findsOneWidget);
+    expect(find.text('Solid'), findsOneWidget);
+    expect(find.text('Pen line width'), findsOneWidget);
+    // hustota výplne sa nastavuje až pri plnej výplni
+    expect(find.text('Fill density'), findsNothing);
+    expect(previewStrokes(tester), isNotEmpty);
+  });
+
+  testWidgets('TextPrintScreen Solid ukáže hustotu výplne', (tester) async {
+    await pumpTextPrint(tester);
+
+    await tester.tap(find.text('Printed (real font)'));
+    await tester.pump();
+    await waitForPreview(tester);
+
+    await tester.tap(find.text('Solid'));
+    await tester.pump();
+    await waitForPreview(tester);
+
+    expect(find.text('Fill density'), findsOneWidget);
+    expect(previewStrokes(tester), isNotEmpty);
+  });
+
+  testWidgets('TextPrintScreen sa vráti z tlačeného fontu späť',
+      (tester) async {
+    await pumpTextPrint(tester);
+
+    final penFont = previewStrokes(tester).length;
+
+    await tester.tap(find.text('Printed (real font)'));
+    await tester.pump();
+    await waitForPreview(tester);
+
+    await tester.tap(find.text('Pen font'));
+    await tester.pump();
+
+    expect(find.text('Outline'), findsNothing);
+    expect(previewStrokes(tester), hasLength(penFont));
+  });
 }

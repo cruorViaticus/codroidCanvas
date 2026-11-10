@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -8,13 +9,18 @@ import '../models/stroke_point.dart';
 import '../providers/robot_provider.dart';
 import '../services/plot_estimator.dart';
 import '../services/plot_transform.dart';
+import '../services/printed_text_generator.dart';
 import '../services/text_stroke_generator.dart';
 import '../widgets/app_logo.dart';
 import '../widgets/paper_format_selector.dart';
 import '../widgets/plot_preview.dart';
 import '../widgets/plot_progress_bar.dart';
 
-/// Režim „Text“: napíš text a robot ho vykreslí jednoťahovým fontom.
+/// Režim „Text“: napíš text a robot ho vykreslí.
+///
+/// Dva štýly: *Pen font* (jednoťahový `VectorFont` – každé písmeno je jedna
+/// čiara) a *Printed (real font)* ([PrintedTextGenerator] – reálny font
+/// rasterizovaný na bitmapu, ktorý pero obkreslí ako obrys alebo vyplní).
 class TextPrintScreen extends StatefulWidget {
   const TextPrintScreen({super.key});
 
@@ -32,6 +38,29 @@ class _TextPrintScreenState extends State<TextPrintScreen> {
   TextAlignment _alignment = TextAlignment.left;
   PlotTransform _transform = const PlotTransform();
 
+  /// `true` = tlačí sa reálny font (obrys alebo plná výplň), `false` =
+  /// jednoťahový font.
+  bool _printed = false;
+
+  /// Ako sa tlačený text kreslí – obrys písmen, alebo plná výplň.
+  PrintedTextFill _printedFill = PrintedTextFill.outline;
+
+  /// Hustota výplne (*Solid*) a šírka stopy pera pre tlačený text (mm).
+  double _fillDensityMm = PrintedTextGenerator.defaultFillDensityMm;
+  double _penWidthMm = RobotProvider.defaultPenWidthMm;
+
+  /// `true`, kým sa rasterizuje tlačený text (počíta sa na pozadí).
+  bool _generating = false;
+
+  /// Poradové číslo požiadavky na prepočet – posledný stav vyhráva.
+  int _requestId = 0;
+
+  /// `true`, kým beží výpočet; nové požiadavky sa len zapíšu a dobehnú po ňom.
+  bool _workerRunning = false;
+
+  /// Doplnený, keď je prepočet hotový (čaká naň odoslanie do fronty).
+  Completer<void>? _idle;
+
   /// Výška zdvihu pera medzi ťahmi (písmenami) v mm nad papierom.
   double _penLiftMm = RobotProvider.defaultPenUpHeightMm;
 
@@ -47,8 +76,25 @@ class _TextPrintScreenState extends State<TextPrintScreen> {
     _paper = provider.paperFormat;
     // Zdvih začína na hodnote z nastavení – dá sa ale zmeniť len pre tento text.
     _penLiftMm = provider.penUpNominalZ;
-    _result = _generate();
+    _penWidthMm = provider.penWidthMm;
+    _result = _generatePenFont();
     _textController.addListener(_onTextChanged);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Formát papiera sa dá zmeniť aj v Settings – náhľad sa musí prepočítať,
+    // inak by ukazoval staré rozmery papiera. Robí sa to až po tomto frame,
+    // lebo tlačený text sa generuje asynchrónne a nesmie sa rozbehnúť počas
+    // buildu.
+    final format =
+        Provider.of<RobotProvider>(context, listen: false).paperFormat;
+    if (format == _paper) return;
+    _paper = format;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _regenerate();
+    });
   }
 
   @override
@@ -58,9 +104,10 @@ class _TextPrintScreenState extends State<TextPrintScreen> {
     super.dispose();
   }
 
-  void _onTextChanged() => setState(() => _result = _generate());
+  void _onTextChanged() => _regenerate();
 
-  TextPlotResult _generate() => TextStrokeGenerator.generate(
+  /// Jednoťahový font – hotový hneď, bez rasterizácie.
+  TextPlotResult _generatePenFont() => TextStrokeGenerator.generate(
         text: _textController.text,
         fontSizeMm: _fontSizeMm,
         lineSpacing: _lineSpacing,
@@ -68,6 +115,74 @@ class _TextPrintScreenState extends State<TextPrintScreen> {
         marginMm: _marginMm,
         paper: _paper,
       );
+
+  /// Tlačený text reálnym fontom – rasterizácia je asynchrónna.
+  Future<TextPlotResult> _generatePrinted() => PrintedTextGenerator.generate(
+        text: _textController.text,
+        fontSizeMm: _fontSizeMm,
+        lineSpacing: _lineSpacing,
+        alignment: _alignment,
+        marginMm: _marginMm,
+        paper: _paper,
+        fill: _printedFill,
+        fillDensityMm: _fillDensityMm,
+        penWidthMm: _penWidthMm,
+        pointSpacingMm: _pointSpacingMm,
+      );
+
+  /// Prepočíta náhľad; pri tlačenom fonte sa počíta na pozadí.
+  void _regenerate() {
+    _requestId++;
+    _pumpGeneration();
+  }
+
+  /// Prepočíta náhľad a **počká**, kým je hotový (pred odoslaním do fronty).
+  Future<void> _regenerateAndWait() {
+    _requestId++;
+    final done = _idle ??= Completer<void>();
+    _pumpGeneration();
+    return done.future;
+  }
+
+  /// Spracuje požiadavky na prepočet – vždy beží len jeden výpočet naraz.
+  ///
+  /// Tlačený text sa rasterizuje desiatky milisekúnd, takže pri ťahaní
+  /// slidera by sa inak rozbehlo niekoľko výpočtov súčasne; tu sa počas
+  /// výpočtu zapíše len „treba prepočítať“ a hneď po ňom sa počíta znova
+  /// s najnovšími hodnotami.
+  Future<void> _pumpGeneration() async {
+    if (_workerRunning) return;
+    _workerRunning = true;
+    try {
+      while (true) {
+        final requested = _requestId;
+        if (!_printed) {
+          final result = _generatePenFont();
+          if (!mounted) return;
+          setState(() {
+            _result = result;
+            _generating = false;
+          });
+        } else {
+          if (!mounted) return;
+          setState(() => _generating = true);
+          final result = await _generatePrinted();
+          if (!mounted) return;
+          setState(() {
+            _result = result;
+            _generating = false;
+          });
+        }
+        // Ovládače sa medzitým nezmenili → náhľad zodpovedá aktuálnemu stavu.
+        if (requested == _requestId) break;
+      }
+    } finally {
+      _workerRunning = false;
+      final idle = _idle;
+      _idle = null;
+      if (idle != null && !idle.isCompleted) idle.complete();
+    }
+  }
 
   /// Ťahy po prípadnom zrkadlení – presne toto ide do fronty aj do náhľadu.
   List<List<StrokePoint>> get _plotStrokes =>
@@ -81,6 +196,11 @@ class _TextPrintScreenState extends State<TextPrintScreen> {
   Future<void> _plot() async {
     final provider = Provider.of<RobotProvider>(context, listen: false);
     final messenger = ScaffoldMessenger.of(context);
+
+    // Tlačený text sa počíta na pozadí – do fronty musí ísť presne to, čo je
+    // práve v náhľade, takže sa pred odoslaním dopočíta aktuálny stav.
+    if (_printed) await _regenerateAndWait();
+    if (!mounted) return;
 
     if (_plotStrokes.isEmpty) {
       messenger.showSnackBar(
@@ -124,13 +244,6 @@ class _TextPrintScreenState extends State<TextPrintScreen> {
   @override
   Widget build(BuildContext context) {
     final robotProvider = Provider.of<RobotProvider>(context);
-
-    // Formát papiera sa dá zmeniť aj tu (alebo v Settings) - náhľad sa musí
-    // prepočítať, inak by ukazoval staré rozmery papiera.
-    if (robotProvider.paperFormat != _paper) {
-      _paper = robotProvider.paperFormat;
-      _result = _generate();
-    }
 
     final duration =
         PlotEstimator.estimateDuration(_plotStrokes, paper: _paper);
@@ -182,10 +295,10 @@ class _TextPrintScreenState extends State<TextPrintScreen> {
               max: 40,
               divisions: 74,
               label: '${_fontSizeMm.toStringAsFixed(1)} mm',
-              onChanged: (v) => setState(() {
+              onChanged: (v) {
                 _fontSizeMm = v;
-                _result = _generate();
-              }),
+                _regenerate();
+              },
             ),
             _sliderRow(
               label: 'Line spacing',
@@ -197,10 +310,10 @@ class _TextPrintScreenState extends State<TextPrintScreen> {
               max: 3.0,
               divisions: 20,
               label: '${_lineSpacing.toStringAsFixed(2)} ×',
-              onChanged: (v) => setState(() {
+              onChanged: (v) {
                 _lineSpacing = v;
-                _result = _generate();
-              }),
+                _regenerate();
+              },
             ),
             _sliderRow(
               label: 'Paper margin',
@@ -212,10 +325,10 @@ class _TextPrintScreenState extends State<TextPrintScreen> {
               max: 60,
               divisions: 60,
               label: '${_marginMm.toStringAsFixed(0)} mm',
-              onChanged: (v) => setState(() {
+              onChanged: (v) {
                 _marginMm = v;
-                _result = _generate();
-              }),
+                _regenerate();
+              },
             ),
             _sliderRow(
               label: 'Pen lift between strokes',
@@ -246,13 +359,107 @@ class _TextPrintScreenState extends State<TextPrintScreen> {
                   ChoiceChip(
                     label: Text(entry.value),
                     selected: _alignment == entry.key,
-                    onSelected: (_) => setState(() {
+                    onSelected: (_) {
                       _alignment = entry.key;
-                      _result = _generate();
-                    }),
+                      _regenerate();
+                    },
                   ),
               ],
             ),
+            const SizedBox(height: 4),
+            const Divider(height: 24),
+            Wrap(
+              spacing: 8,
+              children: [
+                for (final entry in const {
+                  false: 'Pen font',
+                  true: 'Printed (real font)',
+                }.entries)
+                  ChoiceChip(
+                    label: Text(entry.value),
+                    selected: _printed == entry.key,
+                    onSelected: (_) {
+                      if (_printed == entry.key) return;
+                      _printed = entry.key;
+                      _regenerate();
+                    },
+                  ),
+              ],
+            ),
+            Text(
+              _printed
+                  ? 'The real typeface is rasterised and plotted – either as '
+                      'letter outlines or as a solid fill.'
+                  : 'One-stroke font – one line per letter, the fastest option.',
+              style: TextStyle(color: Colors.blueGrey.shade400, fontSize: 12),
+            ),
+            if (_printed) ...[
+              const SizedBox(height: 4),
+              Wrap(
+                spacing: 8,
+                children: [
+                  for (final entry in const {
+                    PrintedTextFill.outline: 'Outline',
+                    PrintedTextFill.solid: 'Solid',
+                  }.entries)
+                    ChoiceChip(
+                      label: Text(entry.value),
+                      selected: _printedFill == entry.key,
+                      onSelected: (_) {
+                        if (_printedFill == entry.key) return;
+                        _printedFill = entry.key;
+                        _regenerate();
+                      },
+                    ),
+                ],
+              ),
+              _sliderRow(
+                label: 'Pen line width',
+                value: '${_penWidthMm.toStringAsFixed(2)} mm',
+              ),
+              Slider(
+                value: _penWidthMm.clamp(RobotProvider.minPenWidthMm, 1.0),
+                min: RobotProvider.minPenWidthMm,
+                max: 1.0,
+                divisions: 19, // kroky po 0.05 mm
+                label: '${_penWidthMm.toStringAsFixed(2)} mm',
+                onChanged: (v) {
+                  _penWidthMm = v;
+                  _regenerate();
+                },
+              ),
+              Text(
+                'How wide the pen draws (0.2 mm = thin liner). Lines closer than '
+                'the pen width merge, so the outline spacing follows this value.',
+                style: TextStyle(color: Colors.blueGrey.shade400, fontSize: 12),
+              ),
+              if (_printedFill == PrintedTextFill.solid) ...[
+                _sliderRow(
+                  label: 'Fill density',
+                  value: '${_fillDensityMm.toStringAsFixed(2)} mm',
+                ),
+                Slider(
+                  value: _fillDensityMm,
+                  min: 0.4,
+                  max: 2.0,
+                  divisions: 32,
+                  label: '${_fillDensityMm.toStringAsFixed(2)} mm',
+                  onChanged: (v) {
+                    _fillDensityMm = v;
+                    _regenerate();
+                  },
+                ),
+                Text(
+                  'Solid letters are filled line by line – a denser fill means '
+                  'more points and a slower plot.',
+                  style: TextStyle(
+                    color: Colors.blueGrey.shade400,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ],
+            const SizedBox(height: 4),
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
               title: const Text('Mirror horizontally'),
@@ -268,13 +475,20 @@ class _TextPrintScreenState extends State<TextPrintScreen> {
               onChanged: (v) =>
                   setState(() => _transform = _transform.copyWith(mirrorY: v)),
             ),
+            if (_result.truncated)
+              _notice(
+                icon: Icons.speed,
+                color: Colors.deepOrange,
+                text: 'Výplň je príliš hustá – zvyšok kresby sa vynechal '
+                    '(zväčši Fill density alebo zmenši písmo).',
+              ),
             if (_result.overflow)
               _notice(
                 icon: Icons.warning_amber,
                 color: Colors.orange.shade800,
                 text: 'Text je väčší ako papier – zmenši písmo alebo okraje.',
               ),
-            if (_result.unsupportedCharacters.isNotEmpty)
+            if (!_printed && _result.unsupportedCharacters.isNotEmpty)
               _notice(
                 icon: Icons.info_outline,
                 color: Colors.blueGrey,
@@ -288,7 +502,8 @@ class _TextPrintScreenState extends State<TextPrintScreen> {
                 child: PlotPreview(
                   strokes: _plotStrokes,
                   paper: _paper,
-                  penWidthMm: robotProvider.penWidthMm,
+                  penWidthMm: _penWidthMm,
+                  busy: _generating,
                   emptyLabel: 'Zadaj text pre náhľad',
                 ),
               ),
@@ -327,7 +542,7 @@ class _TextPrintScreenState extends State<TextPrintScreen> {
             ),
             const SizedBox(height: 8),
             OutlinedButton.icon(
-              onPressed: () => setState(() => _result = _generate()),
+              onPressed: _regenerate,
               icon: const Icon(Icons.refresh),
               label: const Text('Regenerate Preview'),
               style: OutlinedButton.styleFrom(

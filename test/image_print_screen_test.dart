@@ -3,7 +3,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:codroid_pen_plotter/models/outline_options.dart';
 import 'package:codroid_pen_plotter/models/plot_pattern.dart';
+import 'package:codroid_pen_plotter/models/plot_start_side.dart';
 import 'package:codroid_pen_plotter/providers/robot_provider.dart';
 import 'package:codroid_pen_plotter/screens/image_print_screen.dart';
 import 'package:codroid_pen_plotter/widgets/plot_preview.dart';
@@ -126,4 +128,125 @@ void main() {
     expect(provider.pendingStrokes, 0);
     expect(provider.strokes, isEmpty);
   });
+
+  testWidgets('ImagePrintScreen – odkiaľ začať a info o rozstupe bodov',
+      (tester) async {
+    await pumpImagePrint(tester);
+
+    // prepínač „Start from“ s vysvetlením zvolenej strany
+    expect(find.text('Start from'), findsOneWidget);
+    expect(find.text(PlotStartSide.top.description), findsOneWidget);
+
+    expect(
+      tester
+          .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Top'))
+          .selected,
+      isTrue,
+    );
+    expect(
+      tester
+          .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Bottom'))
+          .selected,
+      isFalse,
+    );
+
+    await tester.tap(find.widgetWithText(ChoiceChip, 'Bottom'));
+    await tester.pumpAndSettle();
+
+    expect(
+      tester
+          .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Bottom'))
+          .selected,
+      isTrue,
+    );
+    // vysvetlenie sa zmení podľa zvolenej strany
+    expect(find.text(PlotStartSide.bottom.description), findsOneWidget);
+    expect(find.text(PlotStartSide.top.description), findsNothing);
+
+    // rozstup bodov je vysvetlený aj číselne (body na meter línie)
+    expect(find.textContaining('points per metre of line'), findsOneWidget);
+  });
+
+  testWidgets('ImagePrintScreen – Sketch vysvetlí minimálny krok bodov',
+      (tester) async {
+    await pumpImagePrint(tester);
+
+    await tester.tap(find.widgetWithText(ChoiceChip, 'Sketch'));
+    await tester.pumpAndSettle();
+
+    expect(find.text(PlotPattern.sketch.description), findsOneWidget);
+    // predvolený rozstup 0,6 mm je pod minimom → UI ukáže 0,80 mm
+    expect(
+      find.textContaining('Sketch keeps the points at least 0.80 mm apart'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('0.80 mm ≈'), findsOneWidget);
+  });
+
+  testWidgets('ImagePrintScreen – Outline options sa ukážu pri obryse',
+      (tester) async {
+    await pumpImagePrint(tester);
+
+    // pri výplniach (auto / horizontal) tam nič také nie je
+    expect(find.text('Outline options'), findsNothing);
+
+    await tester.tap(find.widgetWithText(ChoiceChip, 'Outline'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Outline options'), findsOneWidget);
+    expect(find.text('Outline step'), findsOneWidget);
+    expect(find.text('Skip details under'), findsOneWidget);
+    expect(find.text('Smoothing'), findsOneWidget);
+
+    // poradie ťahov – predvolene `nearest`
+    for (final order in OutlineOrder.values) {
+      expect(find.widgetWithText(ChoiceChip, order.label), findsOneWidget);
+    }
+    expect(
+      tester
+          .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Nearest'))
+          .selected,
+      isTrue,
+    );
+    expect(find.text(OutlineOrder.nearest.description), findsOneWidget);
+
+    // krok je predvolene automatický
+    expect(find.text('Auto (0.60 mm)'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(ChoiceChip, 'As found'));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'As found'))
+          .selected,
+      isTrue,
+    );
+    expect(find.text(OutlineOrder.asFound.description), findsOneWidget);
+
+    // vyhladenie sa dá prepnúť na `Strong`
+    await tester.tap(find.widgetWithText(ChoiceChip, 'Strong'));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Strong'))
+          .selected,
+      isTrue,
+    );
+    expect(find.text(OutlineSmoothing.strong.description), findsOneWidget);
+
+    // vypnutie rotácie začiatku obrysu
+    final rotate = find.widgetWithText(
+      SwitchListTile,
+      'Start each loop at the closest point',
+    );
+    await tester.tap(rotate);
+    await tester.pumpAndSettle();
+    expect(tester.widget<SwitchListTile>(rotate).value, isFalse);
+
+    // pri `Sketch` ostávajú tie isté voľby k dispozícii
+    await tester.tap(find.widgetWithText(ChoiceChip, 'Sketch'));
+    await tester.pumpAndSettle();
+    expect(find.text('Outline options'), findsOneWidget);
+  });
+
 }

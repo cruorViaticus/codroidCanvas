@@ -4,8 +4,10 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../models/outline_options.dart';
 import '../models/paper_format.dart';
 import '../models/plot_pattern.dart';
+import '../models/plot_start_side.dart';
 import '../models/stroke_point.dart';
 import '../providers/robot_provider.dart';
 import '../services/image_stroke_generator.dart';
@@ -57,6 +59,13 @@ class _ImagePrintScreenState extends State<ImagePrintScreen> {
   /// Pattern, ktorým sa obrázok vyplní (`auto` = najlacnejší pre tento obrázok).
   PlotPattern _pattern = PlotPattern.auto;
 
+  /// Nastavenia obrysov (*Outline* / *Sketch*): poradie ťahov, vyhladenie,
+  /// krok bodov a najmenší detail. Ostatné patterny ich ignorujú.
+  OutlineOptions _outline = const OutlineOptions();
+
+  /// Odkiaľ pero kresbu začne (`top` = horná línia, `bottom` = dolná).
+  PlotStartSide _startSide = kDefaultPlotStartSide;
+
   /// Výška zdvihu pera medzi líniami / bodkami (mm nad papierom).
   double _penLiftMm = RobotProvider.defaultPenUpHeightMm;
 
@@ -78,6 +87,59 @@ class _ImagePrintScreenState extends State<ImagePrintScreen> {
   List<List<StrokePoint>> get _plotStrokes =>
       _transform.applyToStrokes(_plot?.strokes ?? const []);
 
+  /// Rozostup bodov, ktorý generátor naozaj použije (mm).
+  ///
+  /// Režim `sketch` má pevnú spodnú hranicu – body bližšie ako
+  /// `ImageStrokeGenerator.minSketchStepMm` robot nevie prejsť, preto sa
+  /// rozostup v tomto režime nikdy nezmenší pod ňu. Vlastný krok obrysov
+  /// ([OutlineOptions.stepMm]) má prednosť pred sliderom „Point spacing“.
+  double get _effectivePointSpacingMm {
+    final stepMm = _outline.stepMm;
+    if (stepMm > 0) {
+      return _pattern == PlotPattern.sketch &&
+              stepMm < ImageStrokeGenerator.minSketchStepMm
+          ? ImageStrokeGenerator.minSketchStepMm
+          : stepMm;
+    }
+    return _pattern == PlotPattern.sketch
+        ? ImageStrokeGenerator.sketchStepMmFor(
+            pointSpacingMm: _pointSpacingMm,
+            penWidthMm: _penWidthMm,
+          )
+        : _pointSpacingMm;
+  }
+
+  /// Krok, ktorý by generátor použil bez vlastného nastavenia obrysov (mm).
+  ///
+  /// Ukazuje ho UI pri slidri „Outline step“ ako hodnotu `Auto`.
+  double get _automaticStepMm => _pattern == PlotPattern.sketch
+      ? ImageStrokeGenerator.sketchStepMmFor(
+          pointSpacingMm: _pointSpacingMm,
+          penWidthMm: _penWidthMm,
+        )
+      : _pointSpacingMm;
+
+  /// Koľko bodov pripadne na 1 m línie pri aktuálnom rozstupe bodov.
+  ///
+  /// Je to len informatívny údaj pre UI („hustota“ kresby), samotný generátor
+  /// boduje presne podľa `pointSpacingMm` (v režime `sketch` podľa
+  /// [_effectivePointSpacingMm]).
+  int get _pointsPerMetre => _effectivePointSpacingMm <= 0
+      ? 0
+      : (1000 / _effectivePointSpacingMm).round();
+
+  /// Koľko bodov z limitu práve prepočítaná kresba spotrebuje.
+  ///
+  /// Robot má obmedzenú dĺžku fronty (`defaultMaxPoints`), preto sa hodí
+  /// vidieť, ako ďaleko od limitu kresba je a či bola orezená.
+  String _queuePointsText(ImagePlotResult? plot) {
+    if (plot == null) return '';
+    const limit = ImageStrokeGenerator.defaultMaxPoints;
+    return plot.truncated
+        ? ' – drawing cut off at the $limit point limit'
+        : ' – ${plot.pointCount} of $limit points';
+  }
+
   /// Prepočíta riadky z už dekódovaného obrázka (bez opätovného načítania).
   ImagePlotResult? _buildPlot() {
     final gray = _gray;
@@ -92,6 +154,8 @@ class _ImagePrintScreenState extends State<ImagePrintScreen> {
       marginMm: _marginMm,
       penWidthMm: _penWidthMm,
       paper: _paper,
+      startSide: _startSide,
+      outline: _outline,
     );
   }
 
@@ -195,9 +259,15 @@ class _ImagePrintScreenState extends State<ImagePrintScreen> {
     // ťahy nekopili a progress bar začínal od nuly.
     if (!provider.isPlotting) provider.clearCanvas();
 
+    // Filter v motion procesore nesmie byť hrubší než krok, ktorým generátor
+    // body naozaj umiestnil – inak by z obrysu ostali len každé druhé body.
+    final spacingMm = _effectivePointSpacingMm < _pointSpacingMm
+        ? _effectivePointSpacingMm
+        : _pointSpacingMm;
+
     provider.addStrokes(
       strokes,
-      minPointSpacingMm: _pointSpacingMm,
+      minPointSpacingMm: spacingMm,
       penLiftMm: _penLiftMm,
     );
 
@@ -314,6 +384,8 @@ class _ImagePrintScreenState extends State<ImagePrintScreen> {
                 _plot = _buildPlot();
               }),
             ),
+            const SizedBox(height: 12),
+            _startSideRow(),
             const Divider(height: 24),
             _sliderRow(
               'Pen lift between lines / dots',
@@ -384,6 +456,30 @@ class _ImagePrintScreenState extends State<ImagePrintScreen> {
                 _plot = _buildPlot();
               }),
             ),
+            Text(
+              'Distance between the points the robot receives – the arm draws a '
+              'line from one point to the next, so this is also the smallest '
+              'step it keeps between two commands. Smaller = curves stay '
+              'faithful but the queue grows (limit '
+              '${ImageStrokeGenerator.defaultMaxPoints} points); larger = fewer '
+              'points, faster plotting and shorter lines.',
+              style: TextStyle(color: Colors.blueGrey.shade400, fontSize: 12),
+            ),
+            Text(
+              'Now: ${_effectivePointSpacingMm.toStringAsFixed(2)} mm ≈ '
+              '$_pointsPerMetre points per metre of line'
+              '${_queuePointsText(plot)}.',
+              style: TextStyle(color: Colors.indigo.shade300, fontSize: 12),
+            ),
+            if (_pattern == PlotPattern.sketch)
+              Text(
+                'Sketch keeps the points at least '
+                '${_effectivePointSpacingMm.toStringAsFixed(2)} mm apart – the '
+                'robot cannot follow shorter steps – and skips details smaller '
+                'than that.',
+                style: TextStyle(color: Colors.orange.shade800, fontSize: 12),
+              ),
+            if (_pattern.isOutline) _outlineOptions(),
             _sliderRow(
               'Threshold',
               '${(_threshold * 100).toStringAsFixed(0)} %',
@@ -494,6 +590,202 @@ class _ImagePrintScreenState extends State<ImagePrintScreen> {
       ),
     );
   }
+
+  /// Prepínač „odkiaľ začať“ – horná alebo dolná línia kresby.
+  ///
+  /// Obrázok sa nemení (hore ostáva hore), mení sa len poradie ťahov, takže
+  /// pero začne tam, kde práve stojí – pri spodnom okraji papiera je tak
+  /// prvý prejazd kratší.
+  Widget _startSideRow() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Text(
+              'Start from',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                _startSide.description,
+                style: TextStyle(color: Colors.blueGrey.shade400, fontSize: 12),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          children: [
+            for (final side in PlotStartSide.values)
+              ChoiceChip(
+                avatar: Icon(
+                  side.isBottom
+                      ? Icons.vertical_align_bottom
+                      : Icons.vertical_align_top,
+                  size: 18,
+                ),
+                label: Text(side.label),
+                selected: _startSide == side,
+                onSelected: (_) => setState(() {
+                  _startSide = side;
+                  _plot = _buildPlot();
+                }),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  /// Nastavenia obrysov – viditeľné len pri *Outline* / *Sketch*.
+  ///
+  /// Tie isté hrany sa dajú prejsť rôzne: poradie ťahov rozhoduje o dĺžke
+  /// prejazdov (a práve tie controller odmieta), vyhladenie o počte bodov
+  /// a „najmenší detail“ o tom, či pero vôbec klesne k bodke pod rozlíšením
+  /// pera.
+  Widget _outlineOptions() {
+    final stepText = _outline.stepMm > 0
+        ? '${_outline.stepMm.toStringAsFixed(2)} mm'
+        : 'Auto (${_automaticStepMm.toStringAsFixed(2)} mm)';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 4),
+        Row(
+          children: [
+            const Text(
+              'Outline options',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                'Stroke order, smoothing, step and smallest detail',
+                style: TextStyle(color: Colors.blueGrey.shade400, fontSize: 12),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final order in OutlineOrder.values)
+              ChoiceChip(
+                label: Text(order.label),
+                avatar: Icon(_outlineOrderIcon(order), size: 18),
+                selected: _outline.order == order,
+                onSelected: (_) => setState(() {
+                  _outline = _outline.copyWith(order: order);
+                  _plot = _buildPlot();
+                }),
+              ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Text(
+          _outline.order.description,
+          style: TextStyle(color: Colors.blueGrey.shade400, fontSize: 12),
+        ),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Start each loop at the closest point'),
+          subtitle: const Text('No traverse back along the line it just drew'),
+          value: _outline.rotateStart,
+          onChanged: (v) => setState(() {
+            _outline = _outline.copyWith(rotateStart: v);
+            _plot = _buildPlot();
+          }),
+        ),
+        Row(
+          children: [
+            const Text(
+              'Smoothing',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                _outline.smoothing.description,
+                style: TextStyle(color: Colors.blueGrey.shade400, fontSize: 12),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final smoothing in OutlineSmoothing.values)
+              ChoiceChip(
+                label: Text(smoothing.label),
+                selected: _outline.smoothing == smoothing,
+                onSelected: (_) => setState(() {
+                  _outline = _outline.copyWith(smoothing: smoothing);
+                  _plot = _buildPlot();
+                }),
+              ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        _sliderRow('Outline step', stepText),
+        Slider(
+          value: _outline.stepMm.clamp(0.0, 3.0),
+          min: 0,
+          max: 3,
+          divisions: 30, // kroky po 0.1 mm, 0 = automaticky
+          label: stepText,
+          onChanged: (v) => setState(() {
+            _outline = _outline.copyWith(stepMm: v);
+            _plot = _buildPlot();
+          }),
+        ),
+        Text(
+          'Distance between the points of the outline. 0 = automatic '
+          '(${_automaticStepMm.toStringAsFixed(2)} mm) – and never below '
+          '${ImageStrokeGenerator.minSketchStepMm.toStringAsFixed(2)} mm, '
+          'because the robot cannot follow shorter steps.',
+          style: TextStyle(color: Colors.blueGrey.shade400, fontSize: 12),
+        ),
+        _sliderRow(
+          'Skip details under',
+          _outline.minDetailMm > 0
+              ? '${_outline.minDetailMm.toStringAsFixed(1)} mm'
+              : 'Off',
+        ),
+        Slider(
+          value: _outline.minDetailMm.clamp(0.0, 5.0),
+          min: 0,
+          max: 5,
+          divisions: 50,
+          label: '${_outline.minDetailMm.toStringAsFixed(1)} mm',
+          onChanged: (v) => setState(() {
+            _outline = _outline.copyWith(minDetailMm: v);
+            _plot = _buildPlot();
+          }),
+        ),
+        Text(
+          'Off keeps every detail. A speck smaller than the pen line is only a '
+          'poke into the paper – raising this drops it before it reaches the '
+          'robot (fewer pen lifts, fewer warnings).',
+          style: TextStyle(color: Colors.blueGrey.shade400, fontSize: 12),
+        ),
+      ],
+    );
+  }
+
+  /// Ikona poradia obrysov (chip v UI).
+  IconData _outlineOrderIcon(OutlineOrder order) => switch (order) {
+        OutlineOrder.asFound => Icons.format_list_numbered,
+        OutlineOrder.nearest => Icons.near_me,
+        OutlineOrder.nearestFlipped => Icons.swap_horiz,
+      };
 
   /// Popisok + hodnota nad sliderom.
   Widget _sliderRow(String label, String value) {

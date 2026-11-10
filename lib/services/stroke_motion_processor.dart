@@ -34,6 +34,17 @@ class StrokeMotionProcessor {
   /// duplikát, na ktorý by inak nadviazal nulový segment.
   static const double duplicateToleranceMm = 0.02;
 
+  /// Hranica „kolineárne a opačným smerom“ pre bežné segmenty.
+  ///
+  /// cos(180°) = −1; tolerancia pokrýva zaokrúhlenie súradníc a pár stupňov
+  /// odchýlky, ktorú controller pri zaobľovaní ešte vyhodnotí ako obrat.
+  static const double reversalCosineTolerance = -0.999;
+
+  /// Hranica pre krátke prejazdy (≤ [minTraverseMm]) – tam stačí menšia
+  /// odchýlka, lebo pero sa vracia takmer po vlastnej čiare a controller to
+  /// odmietne zaobliť (`Cannot transition!`).
+  static const double microReversalCosineTolerance = -0.98;
+
   /// Minimálna vzdialenosť dvoch bodov ťahu v mm (filtrovanie vstupu).
   ///
   /// Predvolená hodnota pre voľnú kresbu – detailnejšie režimy (text, obrázok)
@@ -130,6 +141,8 @@ class StrokeMotionProcessor {
     bool firstStroke = true;
     // Posledný bod, v ktorom pero kreslilo (pero je na ňom ešte dole).
     Offset? drawnTo;
+    // Predposledný nakreslený bod – podľa neho sa pozná 180° obrat.
+    Offset? drawnFrom;
 
     /// Zdvihne pero po nakreslenom ťahu.
     ///
@@ -149,9 +162,13 @@ class StrokeMotionProcessor {
       // Pero ostane dole, ak ďalší ťah začína tam, kde predchádzajúci skončil
       // – dva ťahy sa spoja do jednej dlhšej čiary (žiadny zbytočný zdvih).
       final last = drawnTo;
-      final join = penIsDown &&
+      final canJoin = penIsDown &&
           last != null &&
           (path.first - last).distance <= minTraverseMm;
+      // ...ale nikdy nie vtedy, keď by sa pero vrátilo po tej istej čiare
+      // (spojenie by vytvorilo 180° obrat, ktorý controller odmietne:
+      // „Cannot transition! ... collinear and in opposite directions“).
+      final join = canJoin && !_wouldReverse(drawnFrom, last, path);
 
       if (!join) {
         liftPen();
@@ -179,6 +196,10 @@ class StrokeMotionProcessor {
       for (int i = 1; i < path.length; i++) {
         points.add(_blendPoint(path[i], provider.penDownZ));
       }
+      // Smer posledného nakresleného segmentu – `drawnFrom → drawnTo` – podľa
+      // neho sa rozhoduje, či sa dá na ťah plynulo nadviazať (path má aspoň
+      // 2 body, viď kontrola vyššie).
+      drawnFrom = path[path.length - 2];
       drawnTo = path.last;
     }
 
@@ -419,8 +440,39 @@ class StrokeMotionProcessor {
     final cosine =
         (first.x * second.x + first.y * second.y + first.z * second.z) /
             (firstLength * secondLength);
-    // cos(180°) = −1; tolerancia pokrýva zaokrúhlenie súradníc v telemetrii.
-    return cosine < -0.999;
+    // Krátke prejazdy (pero sa vracia o pár desatín mm) stačí odmietnuť už
+    // pri menšej odchýlke – controller ich zaobliť nedokáže a hlási chybu.
+    final tolerance = math.min(firstLength, secondLength) <= minTraverseMm
+        ? microReversalCosineTolerance
+        : reversalCosineTolerance;
+    return cosine < tolerance;
+  }
+
+  /// Vznikol by spojením ťahov obrat o 180°?
+  ///
+  /// Spojenie sa robí v rovine papiera (XY), preto sa tu pozerá len na XY
+  /// zložky: posledný nakreslený segment `from → pivot` a prvý segment
+  /// nového ťahu `pivot → path[1]`. Ak idú po tej istej čiare späť, pero by
+  /// sa vrátilo po vlastnej čiare – vtedy radšej zdvihneme (a prejdeme
+  /// oblúkom), než aby controller balík odmietol.
+  static bool _wouldReverse(Offset? from, Offset? pivot, List<Offset> path) {
+    if (from == null || pivot == null || path.length < 2) return false;
+    return _areReversing(from, pivot, path[1]);
+  }
+
+  /// Idú segmenty `a → b` a `b → c` po tej istej čiare opačným smerom (v XY)?
+  static bool _areReversing(Offset a, Offset b, Offset c) {
+    final first = b - a;
+    final second = c - b;
+    final firstLength = first.distance;
+    final secondLength = second.distance;
+    if (firstLength <= duplicateToleranceMm ||
+        secondLength <= duplicateToleranceMm) {
+      return false;
+    }
+    final cosine = (first.dx * second.dx + first.dy * second.dy) /
+        (firstLength * secondLength);
+    return cosine < reversalCosineTolerance;
   }
 
   /// Rozdiel dvoch pozícií balíka v mm.

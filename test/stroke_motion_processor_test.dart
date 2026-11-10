@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -409,6 +410,105 @@ void main() {
       final fast = processor.estimatePacketDurationMs(packet);
 
       expect(slow, greaterThan(fast));
+    });
+  });
+
+  group('Obraty a spájanie ťahov', () {
+    /// Kosínus uhla v rovine papiera (XY) – Z sa ignoruje, tak ako to vidí
+    /// controller pri zaobľovaní.
+    double xyCosine(
+      Map<String, dynamic> a,
+      Map<String, dynamic> b,
+      Map<String, dynamic> c,
+    ) {
+      double x(Map<String, dynamic> p) => (_cpos(p)['x'] as num).toDouble();
+      double y(Map<String, dynamic> p) => (_cpos(p)['y'] as num).toDouble();
+      final dx1 = x(b) - x(a);
+      final dy1 = y(b) - y(a);
+      final dx2 = x(c) - x(b);
+      final dy2 = y(c) - y(b);
+      final first = math.sqrt(dx1 * dx1 + dy1 * dy1);
+      final second = math.sqrt(dx2 * dx2 + dy2 * dy2);
+      if (first == 0 || second == 0) return 0.0;
+      return (dx1 * dx2 + dy1 * dy2) / (first * second);
+    }
+
+    test('spojenie, ktoré by sa vrátilo po tej istej čiare, pero zdvihne',
+        () async {
+      final provider = RobotProvider();
+      final processor = _CapturingProcessor(provider);
+
+      // prvý ťah ide doprava, druhý začína hneď vedľa jeho konca (0,3 mm,
+      // teda v rámci minTraverseMm) a ide späť po tej istej čiare
+      final first = [
+        StrokePoint(x: 0.10, y: 0.10, pressure: 1.0),
+        StrokePoint(x: 0.40, y: 0.10, pressure: 1.0),
+      ];
+      final second = [
+        StrokePoint(x: 0.3986, y: 0.10, pressure: 1.0),
+        StrokePoint(x: 0.10, y: 0.10, pressure: 1.0),
+      ];
+
+      await processor.plotStrokes([first, second], minPointSpacing: 0.1);
+
+      final packet = processor.packets.single;
+      final zs = packet.map((p) => (_cpos(p)['z'] as num).toDouble()).toList();
+      final firstDown = zs.indexOf(provider.penDownZ);
+      final lastDown = zs.lastIndexOf(provider.penDownZ);
+
+      // Medzi dvoma kresleniami pero zdvihlo – žiadne vracanie sa po čiare.
+      expect(firstDown, greaterThanOrEqualTo(0),
+          reason: 'oba ťahy sa musia nakresliť (pero aspoň raz dole)');
+      expect(lastDown, greaterThan(firstDown));
+      expect(
+        zs.sublist(firstDown, lastDown).contains(provider.penUpZ),
+        isTrue,
+        reason: 'spojenie by vytvorilo 180° obrat (Cannot transition!)',
+      );
+
+      // a nikde v balíku nie je zaoblený obrat o 180°
+      for (var i = 1; i < packet.length - 1; i++) {
+        expect(xyCosine(packet[i - 1], packet[i], packet[i + 1]),
+            greaterThan(-0.999));
+      }
+    });
+
+    test('krátky prejazd takmer späť po čiare dostane FINE', () {
+      final provider = RobotProvider();
+      final processor = StrokeMotionProcessor(provider);
+
+      Map<String, dynamic> point(double x, double y) =>
+          processor.buildCartPoint(x, y, 0, zoneType: 'RELATIVE');
+
+      // 60 mm doprava a potom 0,3 mm späť pod uhlom ~10° (cos ≈ −0,986):
+      // controller by to zaobliť nedokázal, preto to musí byť FINE.
+      final cleaned = StrokeMotionProcessor.sanitizePoints([
+        point(10, 10),
+        point(70, 10),
+        point(69.7, 10.05),
+      ]);
+
+      expect(cleaned, hasLength(3));
+      expect(_zoneType(cleaned[1]), 'FINE');
+    });
+
+    test('bežné (dlhé) segmenty pod 180° sa neoznačia ako obrat', () {
+      final provider = RobotProvider();
+      final processor = StrokeMotionProcessor(provider);
+
+      Map<String, dynamic> point(double x, double y) =>
+          processor.buildCartPoint(x, y, 0, zoneType: 'RELATIVE');
+
+      // oba segmenty majú ~60 mm, uhol je ~170° (cos ≈ −0,985) – to je
+      // ostrý ale legitímny obrat, ktorý sa zaobliť dá
+      final cleaned = StrokeMotionProcessor.sanitizePoints([
+        point(10, 10),
+        point(70, 10),
+        point(10, 20.6),
+      ]);
+
+      expect(cleaned, hasLength(3));
+      expect(_zoneType(cleaned[1]), 'RELATIVE');
     });
   });
 }

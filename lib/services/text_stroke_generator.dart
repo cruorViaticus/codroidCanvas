@@ -27,6 +27,12 @@ class TextPlotResult {
   /// Výška použitého textu v mm.
   final double usedHeightMm;
 
+  /// `true`, ak sa vyčerpal limit bodov (`maxPoints`).
+  ///
+  /// Týka sa len *Printed (real font)* režimu – jednoťahový font má bodov
+  /// málo, kým plná výplň vytlačeného textu sa do limitu nemusí zmestiť.
+  final bool truncated;
+
   const TextPlotResult({
     required this.strokes,
     required this.lines,
@@ -34,6 +40,7 @@ class TextPlotResult {
     required this.unsupportedCharacters,
     required this.overflow,
     required this.usedHeightMm,
+    this.truncated = false,
   });
 
   bool get isEmpty => strokes.isEmpty;

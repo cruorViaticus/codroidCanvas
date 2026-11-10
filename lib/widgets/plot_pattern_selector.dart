@@ -3,7 +3,8 @@ import 'package:flutter/material.dart';
 import '../models/plot_pattern.dart';
 
 /// Výber patternu plotra (Auto / Horizontal / Vertical / Diagonal /
-/// Cross-hatch / Dots / Wave / Spiral / Outline).
+/// Diagonal 2 / Cross-hatch / Triple hatch / Dots / Wave / Spiral / Rings /
+/// Outline / Sketch).
 ///
 /// Pattern sa neukladá do `SharedPreferences` – je to parameter konkrétnej
 /// kresby (rovnako ako hustota riadkov), takže si ho každá obrazovka drží
@@ -38,8 +39,12 @@ class PlotPatternSelector extends StatelessWidget {
         return Icons.view_week_outlined;
       case PlotPattern.diagonal:
         return Icons.show_chart;
+      case PlotPattern.antiDiagonal:
+        return Icons.multiline_chart;
       case PlotPattern.crossHatch:
         return Icons.grid_on;
+      case PlotPattern.tripleHatch:
+        return Icons.dashboard;
       case PlotPattern.dots:
         return Icons.blur_on;
       case PlotPattern.zigzag:
@@ -48,6 +53,10 @@ class PlotPatternSelector extends StatelessWidget {
         return Icons.rotate_right;
       case PlotPattern.contour:
         return Icons.gesture;
+      case PlotPattern.sketch:
+        return Icons.draw;
+      case PlotPattern.rings:
+        return Icons.trip_origin;
     }
   }
 
